@@ -36,6 +36,8 @@ export default function Home() {
 
   const inputRef = useRef(null);
 
+
+
   useEffect(() => {
     cargarMaestro();
   }, []);
@@ -70,6 +72,26 @@ export default function Home() {
     }
     setFiltroLocal('TODOS');
   }, [filtroDistrito, maestroMesas]);
+
+
+  // Agrega este useEffect dentro de tu componente Home en app/page.js
+  useEffect(() => {
+    const canal = new BroadcastChannel('canal_escaneo_side');
+
+    canal.onmessage = (event) => {
+      const codigoRecibido = event.data?.codigo;
+      if (codigoRecibido) {
+        // Setea el código recibido en tu input y procesa el registro automáticamente
+        setCodigoInput(codigoRecibido);
+        
+        // Ejecutamos la lógica de registro/validación
+        procesarCodigoAutomatico(codigoRecibido);
+      }
+    };
+
+    return () => canal.close();
+  }, [tipoSeleccionado]); // Reevalúa con el tipo de documento activo
+
 
   const cargarUltimos = async () => {
     const { data } = await supabase
