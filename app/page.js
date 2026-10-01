@@ -36,8 +36,6 @@ export default function Home() {
 
   const inputRef = useRef(null);
 
-
-
   useEffect(() => {
     cargarMaestro();
   }, []);
@@ -50,6 +48,24 @@ export default function Home() {
       cargarReporte();
     }
   }, [vista, filtroDistrito, filtroLocal, maestroMesas]);
+
+  // ESCUCHAR COMUNICACIÓN DESDE TAMPERMONKEY (SIDE ONPE)
+  useEffect(() => {
+    const canal = new BroadcastChannel('canal_escaneo_side');
+
+    canal.onmessage = (event) => {
+      const codigoRecibido = event.data?.codigo;
+      if (codigoRecibido) {
+        console.log("📥 Código recibido desde SIDE:", codigoRecibido);
+        setCodigoInput(codigoRecibido);
+        
+        // Ejecutar el proceso con el tipo de documento seleccionado actualmente
+        ejecutarRegistro(codigoRecibido, tipoSeleccionado);
+      }
+    };
+
+    return () => canal.close();
+  }, [tipoSeleccionado]);
 
   const cargarMaestro = async () => {
     const { data } = await supabase.from('locales_mesas').select('*');
@@ -72,26 +88,6 @@ export default function Home() {
     }
     setFiltroLocal('TODOS');
   }, [filtroDistrito, maestroMesas]);
-
-
-  // Agrega este useEffect dentro de tu componente Home en app/page.js
-  useEffect(() => {
-    const canal = new BroadcastChannel('canal_escaneo_side');
-
-    canal.onmessage = (event) => {
-      const codigoRecibido = event.data?.codigo;
-      if (codigoRecibido) {
-        // Setea el código recibido en tu input y procesa el registro automáticamente
-        setCodigoInput(codigoRecibido);
-        
-        // Ejecutamos la lógica de registro/validación
-        procesarCodigoAutomatico(codigoRecibido);
-      }
-    };
-
-    return () => canal.close();
-  }, [tipoSeleccionado]); // Reevalúa con el tipo de documento activo
-
 
   const cargarUltimos = async () => {
     const { data } = await supabase
@@ -156,7 +152,6 @@ export default function Home() {
     setResumenData(reporte);
   };
 
-  // FUNCION DE VALIDACION SEGUN TIPO DE MATERIAL
   const validarFormatoCodigo = (codigoUpper, tipo) => {
     const esNumero = (str) => /^\d+$/.test(str);
 
@@ -168,7 +163,6 @@ export default function Home() {
         break;
 
       case 'LISTA_ELECTORES':
-        // 13 caracteres en total: 12 dígitos + 'A' al final
         if (
           codigoUpper.length !== 13 ||
           !esNumero(codigoUpper.substring(0, 12)) ||
@@ -179,7 +173,6 @@ export default function Home() {
         break;
 
       case 'CONTROL_ASISTENCIA':
-        // 9 caracteres en total: 8 dígitos + 'A' al final
         if (
           codigoUpper.length !== 9 ||
           !esNumero(codigoUpper.substring(0, 8)) ||
@@ -190,7 +183,6 @@ export default function Home() {
         break;
 
       case 'ACTA_CELESTE':
-        // 9 caracteres en total: 8 dígitos + 'F' o 'C'
         if (
           codigoUpper.length !== 9 ||
           !esNumero(codigoUpper.substring(0, 8)) ||
@@ -201,7 +193,6 @@ export default function Home() {
         break;
 
       case 'ACTA_VERDE':
-        // 9 caracteres en total: 8 dígitos + 'J' o 'D'
         if (
           codigoUpper.length !== 9 ||
           !esNumero(codigoUpper.substring(0, 8)) ||
@@ -212,7 +203,6 @@ export default function Home() {
         break;
 
       case 'ACTA_ROJA':
-        // 9 caracteres en total: 8 dígitos + 'K' o 'E'
         if (
           codigoUpper.length !== 9 ||
           !esNumero(codigoUpper.substring(0, 8)) ||
@@ -226,18 +216,17 @@ export default function Home() {
         break;
     }
 
-    return null; // Si pasa todas las reglas, retorna null (sin error)
+    return null;
   };
 
-  const procesarEscaneo = async (e) => {
-    e.preventDefault();
-    const codigo = codigoInput.trim();
+  // LÓGICA DE REGISTRO REUTILIZABLE
+  const ejecutarRegistro = async (codigo, tipoDoc) => {
     if (!codigo) return;
 
-    const codigoUpper = codigo.toUpperCase();
-    const codigoLower = codigo.toLowerCase();
+    const codigoUpper = codigo.trim().toUpperCase();
+    const codigoLower = codigo.trim().toLowerCase();
 
-    // 1. VALIDACIÓN GENERAL: Bloquear enlaces/URLs
+    // 1. VALIDACIÓN GENERAL
     const esLink = 
       codigoLower.startsWith('http') || 
       codigoLower.includes('www.') || 
@@ -245,7 +234,7 @@ export default function Home() {
       codigoLower.includes('.com') || 
       codigoLower.includes('.pe');
 
-    if (esLink || codigo.length < 6) {
+    if (esLink || codigoUpper.length < 6) {
       playBeep(false);
       setMensaje({ 
         tipo: 'error', 
@@ -257,7 +246,7 @@ export default function Home() {
     }
 
     // 2. VALIDACIÓN ESPECÍFICA POR TIPO SELECCIONADO
-    const errorFormato = validarFormatoCodigo(codigoUpper, tipoSeleccionado);
+    const errorFormato = validarFormatoCodigo(codigoUpper, tipoDoc);
     if (errorFormato) {
       playBeep(false);
       setMensaje({ 
@@ -268,10 +257,6 @@ export default function Home() {
       inputRef.current?.focus();
       return;
     }
-
-    // Transmitir el código escaneado a la otra pestaña
-    const canal = new BroadcastChannel('canal_escaneo_side');
-    canal.postMessage({ codigo: codigoUpper });
 
     // EXTRAER LOS 6 PRIMEROS DÍGITOS PARA LA MESA
     const mesa = codigoUpper.substring(0, 6);
@@ -297,7 +282,7 @@ export default function Home() {
         {
           codigo_barras: codigoUpper,
           numero_mesa: mesa,
-          tipo_documento: tipoSeleccionado,
+          tipo_documento: tipoDoc,
           local_votacion: localVotacion,
           distrito: distrito
         },
@@ -315,13 +300,18 @@ export default function Home() {
       playBeep(true);
       setMensaje({
         tipo: 'exito',
-        texto: `✅ MESA ${mesa} | LOCAL: ${localVotacion} (${distrito}) | ${tipoSeleccionado}`
+        texto: `✅ MESA ${mesa} | LOCAL: ${localVotacion} (${distrito}) | ${tipoDoc}`
       });
       cargarUltimos();
     }
 
     setCodigoInput('');
     inputRef.current?.focus();
+  };
+
+  const procesarEscaneo = (e) => {
+    e.preventDefault();
+    ejecutarRegistro(codigoInput, tipoSeleccionado);
   };
 
   const playBeep = (exito) => {
@@ -470,7 +460,7 @@ export default function Home() {
         {vista === 'reportes' && (
           <div className="space-y-6">
 
-            {/* SECCIÓN DE FILTROS (DISTRITO Y COLEGIO) */}
+            {/* SECCIÓN DE FILTROS */}
             <div className="bg-white p-5 rounded-xl shadow border space-y-3">
               <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide flex items-center gap-2">
                 🔍 Filtros por Ubicación
