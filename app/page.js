@@ -49,22 +49,23 @@ export default function Home() {
     }
   }, [vista, filtroDistrito, filtroLocal, maestroMesas]);
 
-  // ESCUCHAR COMUNICACIÓN DESDE TAMPERMONKEY (SIDE ONPE)
+  // ESCUCHAR COMUNICACIÓN MULTI-DOMINIO DESDE TAMPERMONKEY
   useEffect(() => {
-    const canal = new BroadcastChannel('canal_escaneo_side');
-
-    canal.onmessage = (event) => {
+    const manejarMensaje = (event) => {
       const codigoRecibido = event.data?.codigo;
       if (codigoRecibido) {
-        console.log("📥 Código recibido desde SIDE:", codigoRecibido);
+        console.log("📥 Código recibido en Vercel vía postMessage:", codigoRecibido);
         setCodigoInput(codigoRecibido);
-        
-        // Ejecutar el proceso con el tipo de documento seleccionado actualmente
         ejecutarRegistro(codigoRecibido, tipoSeleccionado);
       }
     };
 
-    return () => canal.close();
+    // Listener para mensajes entre dominios
+    window.addEventListener('message', manejarMensaje);
+
+    return () => {
+      window.removeEventListener('message', manejarMensaje);
+    };
   }, [tipoSeleccionado]);
 
   const cargarMaestro = async () => {
