@@ -49,23 +49,31 @@ export default function Home() {
     }
   }, [vista, filtroDistrito, filtroLocal, maestroMesas]);
 
-  // ESCUCHAR COMUNICACIÓN MULTI-DOMINIO DESDE TAMPERMONKEY
+  // CONSULTAR API DE ESCANEO CONTINUAMENTE (POLLING DESDE TAMPERMONKEY)
   useEffect(() => {
-    const manejarMensaje = (event) => {
-      const codigoRecibido = event.data?.codigo;
-      if (codigoRecibido) {
-        console.log("📥 Código recibido en Vercel vía postMessage:", codigoRecibido);
-        setCodigoInput(codigoRecibido);
-        ejecutarRegistro(codigoRecibido, tipoSeleccionado);
+    let ultimoTimestamp = 0;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/escaneo');
+        const data = await res.json();
+
+        if (data.escaneo && data.escaneo.timestamp > ultimoTimestamp) {
+          ultimoTimestamp = data.escaneo.timestamp;
+          console.log("📥 Código recibido en Vercel vía API:", data.escaneo.codigo);
+
+          // Actualiza el campo de texto en pantalla
+          setCodigoInput(data.escaneo.codigo);
+
+          // Dispara la función que procesa y guarda el registro
+          ejecutarRegistro(data.escaneo.codigo, tipoSeleccionado);
+        }
+      } catch (err) {
+        console.error("Error al consultar /api/escaneo:", err);
       }
-    };
+    }, 400); // Revisa si hay código nuevo cada 400 ms
 
-    // Listener para mensajes entre dominios
-    window.addEventListener('message', manejarMensaje);
-
-    return () => {
-      window.removeEventListener('message', manejarMensaje);
-    };
+    return () => clearInterval(interval);
   }, [tipoSeleccionado]);
 
   const cargarMaestro = async () => {
