@@ -1,18 +1,21 @@
 import { NextResponse } from 'next/server';
 
-// Variable en memoria dentro del servidor de Vercel
-let ultimoEscaneo = null;
+export const dynamic = 'force-dynamic';
+
+// Un último escaneo POR computadora (clave = clientId)
+const escaneos = {};
 
 export async function POST(request) {
   try {
     const body = await request.json();
     if (body.codigo) {
-      ultimoEscaneo = {
+      const clientId = body.clientId || 'desconocido';
+      escaneos[clientId] = {
         codigo: body.codigo,
-        clientId: body.clientId || 'desconocido',
-        timestamp: Date.now()
+        clientId,
+        timestamp: Date.now(),
       };
-      return NextResponse.json({ success: true, codigo: body.codigo, clientId: ultimoEscaneo.clientId });
+      return NextResponse.json({ success: true, codigo: body.codigo, clientId });
     }
     return NextResponse.json({ success: false, error: 'Código no proporcionado' }, { status: 400 });
   } catch (err) {
@@ -20,6 +23,10 @@ export async function POST(request) {
   }
 }
 
-export async function GET() {
-  return NextResponse.json({ escaneo: ultimoEscaneo });
+export async function GET(request) {
+  const { searchParams } = new URL(request.url);
+  const clientId = searchParams.get('clientId');
+  // Solo devuelve el escaneo de ESA computadora
+  const escaneo = clientId ? escaneos[clientId] || null : null;
+  return NextResponse.json({ escaneo }, { headers: { 'Cache-Control': 'no-store' } });
 }
