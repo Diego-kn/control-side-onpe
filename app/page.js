@@ -325,14 +325,23 @@ export default function Home() {
 
   const playBeep = (exito) => {
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      osc.type = exito ? 'sine' : 'sawtooth';
-      osc.frequency.setValueAtTime(exito ? 880 : 220, ctx.currentTime);
-      osc.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + (exito ? 0.15 : 0.4));
-    } catch (e) {}
+      if (exito) {
+        // Reproduce tu audio 'qrico.ogg' guardado en public/
+        const audio = new Audio('/qrico.ogg');
+        audio.play().catch((err) => console.log('Error al reproducir audio:', err));
+      } else {
+        // Tono de error sintetizado si falla la validación
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(220, ctx.currentTime);
+        osc.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.4);
+      }
+    } catch (e) {
+      console.error('Error de audio:', e);
+    }
   };
 
   const exportarExcel = async () => {
