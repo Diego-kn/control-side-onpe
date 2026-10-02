@@ -34,7 +34,49 @@ export default function Home() {
   const [totalMesasEsperadas, setTotalMesasEsperadas] = useState(231);
   const [registrosFiltradosRaw, setRegistrosFiltradosRaw] = useState([]);
 
+  // Referencias para elementos de Audio pre-cargados
+  const audioSuccessRef = useRef(null);
+  const audioErrorRef = useRef(null);
+  const audioUnlockedRef = useRef(false);
   const inputRef = useRef(null);
+
+  // Inicialización y precarga de audio con desbloqueo de Autoplay
+  useEffect(() => {
+    audioSuccessRef.current = new Audio('/qrico.ogg');
+    audioErrorRef.current = new Audio('/error.ogg');
+
+    const unlockAudio = () => {
+      if (audioUnlockedRef.current) return;
+      
+      const p1 = audioSuccessRef.current.play();
+      if (p1 !== undefined) {
+        p1.then(() => {
+          audioSuccessRef.current.pause();
+          audioSuccessRef.current.currentTime = 0;
+        }).catch(() => {});
+      }
+
+      const p2 = audioErrorRef.current.play();
+      if (p2 !== undefined) {
+        p2.then(() => {
+          audioErrorRef.current.pause();
+          audioErrorRef.current.currentTime = 0;
+        }).catch(() => {});
+      }
+
+      audioUnlockedRef.current = true;
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+    };
+
+    window.addEventListener('click', unlockAudio);
+    window.addEventListener('keydown', unlockAudio);
+
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+    };
+  }, []);
 
   useEffect(() => {
     cargarMaestro();
@@ -228,6 +270,24 @@ export default function Home() {
     return null;
   };
 
+  // REPRODUCCIÓN ROBUSTA DE AUDIO
+  const playBeep = (exito) => {
+    try {
+      const audio = exito ? audioSuccessRef.current : audioErrorRef.current;
+      if (audio) {
+        audio.currentTime = 0;
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((err) => {
+            console.warn('Bloqueo de reproductor o archivo faltante:', err);
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Error en reproducción de audio:', e);
+    }
+  };
+
   // LÓGICA DE REGISTRO REUTILIZABLE
   const ejecutarRegistro = async (codigo, tipoDoc) => {
     if (!codigo) return;
@@ -321,27 +381,6 @@ export default function Home() {
   const procesarEscaneo = (e) => {
     e.preventDefault();
     ejecutarRegistro(codigoInput, tipoSeleccionado);
-  };
-
-  const playBeep = (exito) => {
-    try {
-      if (exito) {
-        // Reproduce tu audio 'qrico.ogg' guardado en public/
-        const audio = new Audio('/qrico.ogg');
-        audio.play().catch((err) => console.log('Error al reproducir audio:', err));
-      } else {
-        // Tono de error sintetizado si falla la validación
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = ctx.createOscillator();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(220, ctx.currentTime);
-        osc.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.4);
-      }
-    } catch (e) {
-      console.error('Error de audio:', e);
-    }
   };
 
   const exportarExcel = async () => {
