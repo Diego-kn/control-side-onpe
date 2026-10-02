@@ -227,9 +227,7 @@ const heatColor = (p) => {
   if (p >= 25) return '#fb923c';
   if (p > 0) return '#f87171';
   return '#fecaca';
-};
-
-/* ============================================================
+};/* ============================================================
    PÁGINA PRINCIPAL
    ============================================================ */
 
@@ -239,6 +237,9 @@ export default function Home() {
   const [codigoInput, setCodigoInput] = useState('');
   const [mensaje, setMensaje] = useState(null);
   const [ultimosRegistros, setUltimosRegistros] = useState([]);
+
+  // Identificador de la laptop local
+  const [myClientId, setMyClientId] = useState('');
 
   // Estados para Maestros y Filtros
   const [maestroMesas, setMaestroMesas] = useState([]);
@@ -263,6 +264,16 @@ export default function Home() {
   const audioUnlockedRef = useRef(false);
   const inputRef = useRef(null);
   const ultimoTimestampRef = useRef(0); // persiste al cambiar de tipo de documento
+
+  // Inicializar o leer el ID único de la laptop
+  useEffect(() => {
+    let cid = localStorage.getItem('MY_LAPTOP_ID');
+    if (!cid) {
+      cid = 'laptop_' + Math.random().toString(36).substring(2, 9);
+      localStorage.setItem('MY_LAPTOP_ID', cid);
+    }
+    setMyClientId(cid);
+  }, []);
 
   // Inicialización y precarga de audio con desbloqueo de Autoplay
   useEffect(() => {
@@ -324,6 +335,13 @@ export default function Home() {
 
         if (data.escaneo && data.escaneo.timestamp > ultimoTimestampRef.current) {
           ultimoTimestampRef.current = data.escaneo.timestamp;
+
+          // Ignorar escaneo si viene de otra laptop/dispositivo
+          if (data.escaneo.clientId && data.escaneo.clientId !== myClientId) {
+            console.log("ℹ️ Escaneo ignorado (pertenece a otro equipo):", data.escaneo.clientId);
+            return;
+          }
+
           console.log("📥 Código recibido en Vercel vía API:", data.escaneo.codigo);
 
           // Actualiza el campo de texto en pantalla
@@ -338,7 +356,7 @@ export default function Home() {
     }, 400); // Revisa si hay código nuevo cada 400 ms
 
     return () => clearInterval(interval);
-  }, [tipoSeleccionado]);
+  }, [tipoSeleccionado, myClientId]);
 
   const cargarMaestro = async () => {
     const { data } = await supabase.from('locales_mesas').select('*');

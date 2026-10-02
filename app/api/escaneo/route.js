@@ -9,9 +9,10 @@ export async function POST(request) {
     if (body.codigo) {
       ultimoEscaneo = {
         codigo: body.codigo,
+        clientId: body.clientId || 'desconocido',
         timestamp: Date.now()
       };
-      return NextResponse.json({ success: true, codigo: body.codigo });
+      return NextResponse.json({ success: true, codigo: body.codigo, clientId: ultimoEscaneo.clientId });
     }
     return NextResponse.json({ success: false, error: 'Código no proporcionado' }, { status: 400 });
   } catch (err) {
