@@ -800,14 +800,24 @@ export default function Home() {
               <Card title="2 · Escanear código de barras" subtitle="El cursor permanece activo para el lector">
                 <form onSubmit={procesarEscaneo}>
                   <div className="relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl">▮▯▮▮</span>
+                    <svg
+                      className="absolute left-4 top-1/2 -translate-y-1/2 h-7 w-7 text-slate-400 pointer-events-none"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    >
+                      <path d="M4 5v14M8 5v14M12 5v14M16 5v14M20 5v14" />
+                      <path d="M6 5v14" strokeWidth="1" />
+                    </svg>
                     <input
                       ref={inputRef}
                       type="text"
                       value={codigoInput}
                       onChange={(e) => setCodigoInput(e.target.value)}
                       placeholder="Escanea aquí..."
-                      className="w-full text-2xl font-mono pl-20 pr-4 py-5 bg-slate-50 border-2 border-slate-300 rounded-xl focus:border-blue-600 focus:bg-white focus:ring-4 focus:ring-blue-100 focus:outline-none transition"
+                      className="w-full text-2xl font-mono pl-16 pr-4 py-5 bg-slate-50 border-2 border-slate-300 rounded-xl focus:border-blue-600 focus:bg-white focus:ring-4 focus:ring-blue-100 focus:outline-none transition"
                       autoFocus
                     />
                   </div>
