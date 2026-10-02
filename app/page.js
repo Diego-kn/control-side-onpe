@@ -133,6 +133,7 @@ const StackedBars = ({ rows }) => {
 // Radar de avance por tipo
 const Radar = ({ rows }) => {
   if (!rows.length) return <Empty />;
+  if (rows.length < 3) return <Empty text="Selecciona al menos 3 tipos para ver el radar" />;
   const cx = 160, cy = 150, R = 100, n = rows.length;
   const ang = (i) => (Math.PI * 2 * i) / n - Math.PI / 2;
   const pt = (i, v) => [cx + Math.cos(ang(i)) * R * v, cy + Math.sin(ang(i)) * R * v];
@@ -246,6 +247,9 @@ export default function Home() {
 
   const [filtroDistrito, setFiltroDistrito] = useState('TODOS');
   const [filtroLocal, setFiltroLocal] = useState('TODOS');
+
+  // NUEVO: filtro (checklist) de tipos de documento a visualizar en reportes
+  const [tiposVisibles, setTiposVisibles] = useState(TIPOS.map((t) => t.id));
 
   // Estados para métricas y reportes
   const [resumenData, setResumenData] = useState([]);
@@ -603,13 +607,49 @@ export default function Home() {
     ejecutarRegistro(codigoInput, tipoSeleccionado);
   };
 
+  /* ============================================================
+     FILTRO DE TIPOS (CHECKLIST)
+     ============================================================ */
+  const todosMarcados = tiposVisibles.length === TIPOS.length;
+
+  const toggleTipoVisible = (id) => {
+    setTiposVisibles((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const toggleTodosTipos = () => {
+    setTiposVisibles(todosMarcados ? [] : TIPOS.map((t) => t.id));
+  };
+
+  // Tipos activos (respetando el orden original)
+  const tiposActivos = useMemo(
+    () => TIPOS.filter((t) => tiposVisibles.includes(t.id)),
+    [tiposVisibles]
+  );
+  const nTipos = tiposActivos.length;
+
+  // Datos ya filtrados por tipo
+  const resumenVis = useMemo(
+    () => resumenData.filter((r) => tiposVisibles.includes(r.id)),
+    [resumenData, tiposVisibles]
+  );
+  const registrosVis = useMemo(
+    () => registrosFiltradosRaw.filter((r) => tiposVisibles.includes(r.tipo_documento)),
+    [registrosFiltradosRaw, tiposVisibles]
+  );
+  const todosVis = useMemo(
+    () => todosRegistros.filter((r) => tiposVisibles.includes(r.tipo_documento)),
+    [todosRegistros, tiposVisibles]
+  );
+
   const exportarExcel = async () => {
-    if (!registrosFiltradosRaw || registrosFiltradosRaw.length === 0) {
+    if (!registrosVis || registrosVis.length === 0) {
       alert('No hay datos registrados con el filtro seleccionado para exportar.');
       return;
     }
 
-    const formateado = registrosFiltradosRaw.map(row => ({
+    const formateado = registrosVis.map(row => ({
       'Código de Barras': row.codigo_barras,
       'Número de Mesa': row.numero_mesa,
       'Local de Votación': row.local_votacion,
@@ -639,30 +679,30 @@ export default function Home() {
         (filtroLocal === 'TODOS' || m.local_votacion === filtroLocal)
     );
 
-    const totalRecibidos = resumenData.reduce((a, r) => a + r.recibidos, 0);
-    const totalEsperadoDocs = totalMesasEsperadas * TIPOS.length;
+    const totalRecibidos = resumenVis.reduce((a, r) => a + r.recibidos, 0);
+    const totalEsperadoDocs = totalMesasEsperadas * nTipos;
     const avanceGlobal = totalEsperadoDocs > 0 ? Math.min(100, Math.round((totalRecibidos / totalEsperadoDocs) * 100)) : 0;
-    const faltantesTotal = resumenData.reduce((a, r) => a + r.faltantes, 0);
+    const faltantesTotal = resumenVis.reduce((a, r) => a + r.faltantes, 0);
 
     // Tipos distintos por mesa
     const tiposPorMesa = {};
-    registrosFiltradosRaw.forEach((r) => {
+    registrosVis.forEach((r) => {
       if (!tiposPorMesa[r.numero_mesa]) tiposPorMesa[r.numero_mesa] = new Set();
       tiposPorMesa[r.numero_mesa].add(r.tipo_documento);
     });
 
-    const buckets = Array.from({ length: TIPOS.length + 1 }, (_, i) => ({ n: i, mesas: 0 }));
+    const buckets = Array.from({ length: nTipos + 1 }, (_, i) => ({ n: i, mesas: 0 }));
     let mesasCompletas = 0;
     const base = mesasFiltradas.length > 0 ? mesasFiltradas.map((m) => m.numero_mesa) : Object.keys(tiposPorMesa);
     base.forEach((mesa) => {
       const k = tiposPorMesa[mesa] ? tiposPorMesa[mesa].size : 0;
-      buckets[Math.min(k, TIPOS.length)].mesas++;
-      if (k >= TIPOS.length) mesasCompletas++;
+      buckets[Math.min(k, nTipos)].mesas++;
+      if (nTipos > 0 && k >= nTipos) mesasCompletas++;
     });
 
     // Escaneos por hora
     const porHora = {};
-    registrosFiltradosRaw.forEach((r) => {
+    registrosVis.forEach((r) => {
       const h = new Date(r.fecha_registro).getHours();
       porHora[h] = (porHora[h] || 0) + 1;
     });
@@ -674,26 +714,26 @@ export default function Home() {
       for (let h = hMin; h <= hMax; h++) puntosHora.push({ label: `${String(h).padStart(2, '0')}h`, value: porHora[h] || 0 });
     }
 
-    // Ranking por distrito (siempre sobre todo el universo)
+    // Ranking por distrito (siempre sobre todo el universo, pero solo tipos visibles)
     const mesasPorDist = {};
     maestroMesas.forEach((m) => { mesasPorDist[m.distrito] = (mesasPorDist[m.distrito] || 0) + 1; });
     const recPorDist = {};
-    todosRegistros.forEach((r) => { recPorDist[r.distrito] = (recPorDist[r.distrito] || 0) + 1; });
+    todosVis.forEach((r) => { recPorDist[r.distrito] = (recPorDist[r.distrito] || 0) + 1; });
     const rankingDistritos = Object.keys(mesasPorDist)
       .map((d) => {
-        const esp = mesasPorDist[d] * TIPOS.length;
+        const esp = mesasPorDist[d] * nTipos;
         const rec = recPorDist[d] || 0;
         return { label: d, value: esp > 0 ? Math.min(100, Math.round((rec / esp) * 100)) : 0, extra: `${rec}/${esp}`, active: d === filtroDistrito };
       })
       .sort((a, b) => b.value - a.value);
 
-    // Heatmap local x tipo
+    // Heatmap local x tipo (solo columnas visibles)
     const locales = {};
     mesasFiltradas.forEach((m) => {
       if (!locales[m.local_votacion]) locales[m.local_votacion] = { mesas: 0, tipos: {} };
       locales[m.local_votacion].mesas++;
     });
-    registrosFiltradosRaw.forEach((r) => {
+    registrosVis.forEach((r) => {
       if (locales[r.local_votacion]) {
         locales[r.local_votacion].tipos[r.tipo_documento] = (locales[r.local_votacion].tipos[r.tipo_documento] || 0) + 1;
       }
@@ -701,8 +741,8 @@ export default function Home() {
     const heat = Object.keys(locales)
       .map((loc) => {
         const info = locales[loc];
-        const celdas = TIPOS.map((t) => (info.mesas > 0 ? Math.min(100, Math.round(((info.tipos[t.id] || 0) / info.mesas) * 100)) : null));
-        const avg = Math.round(celdas.reduce((a, b) => a + (b || 0), 0) / TIPOS.length);
+        const celdas = tiposActivos.map((t) => (info.mesas > 0 ? Math.min(100, Math.round(((info.tipos[t.id] || 0) / info.mesas) * 100)) : null));
+        const avg = nTipos > 0 ? Math.round(celdas.reduce((a, b) => a + (b || 0), 0) / nTipos) : 0;
         return { local: loc, mesas: info.mesas, celdas, avg };
       })
       .sort((a, b) => a.avg - b.avg);
@@ -713,12 +753,12 @@ export default function Home() {
       .map((h) => ({ label: h.local, value: h.avg, extra: `${h.mesas} mesas`, color: heatColor(h.avg) === '#f8fafc' ? '#2563eb' : undefined }));
 
     return { totalRecibidos, totalEsperadoDocs, avanceGlobal, faltantesTotal, buckets, mesasCompletas, puntosHora, rankingDistritos, heat, rankingLocales };
-  }, [maestroMesas, registrosFiltradosRaw, todosRegistros, resumenData, filtroDistrito, filtroLocal, totalMesasEsperadas]);
+  }, [maestroMesas, registrosVis, todosVis, resumenVis, tiposActivos, nTipos, filtroDistrito, filtroLocal, totalMesasEsperadas]);
 
-  const donutData = TIPOS.map((t) => ({
+  const donutData = tiposActivos.map((t) => ({
     label: t.label,
     color: t.hex,
-    value: resumenData.find((r) => r.id === t.id)?.recibidos || 0,
+    value: resumenVis.find((r) => r.id === t.id)?.recibidos || 0,
   }));
 
   const tipoActual = TIPOS.find((t) => t.id === tipoSeleccionado);
@@ -924,213 +964,274 @@ export default function Home() {
               </div>
             </Card>
 
-            {/* KPIs */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <Kpi icon="🧾" label="Mesas esperadas" value={totalMesasEsperadas} sub="según el filtro actual" />
-              <Kpi icon="✅" label="Documentos recibidos" value={analitica.totalRecibidos} sub={`de ${analitica.totalEsperadoDocs} esperados`} accent="text-emerald-600" />
-              <Kpi icon="⏳" label="Documentos faltantes" value={analitica.faltantesTotal} sub="suma de todos los tipos" accent="text-red-600" />
-              <Kpi icon="🏁" label="Mesas completas" value={analitica.mesasCompletas} sub={`con los ${TIPOS.length} documentos`} accent="text-blue-600" />
-            </div>
-
-            {/* Avance global + progreso por tipo */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <Card title="Avance global" subtitle="Todos los documentos combinados" className="lg:col-span-1">
-                <div className="flex flex-col items-center">
-                  <svg viewBox="0 0 200 120" className="w-full max-w-[280px]">
-                    <path d="M 20 110 A 80 80 0 0 1 180 110" fill="none" stroke="#e2e8f0" strokeWidth="18" strokeLinecap="round" />
-                    <path
-                      d="M 20 110 A 80 80 0 0 1 180 110"
-                      fill="none"
-                      stroke={analitica.avanceGlobal >= 75 ? '#059669' : analitica.avanceGlobal >= 40 ? '#f59e0b' : '#dc2626'}
-                      strokeWidth="18"
-                      strokeLinecap="round"
-                      pathLength="100"
-                      strokeDasharray={`${analitica.avanceGlobal} 100`}
-                      style={{ transition: 'stroke-dasharray 0.8s ease' }}
-                    />
-                    <text x="100" y="95" textAnchor="middle" style={{ fontSize: 34, fontWeight: 800 }} className="fill-slate-900">{analitica.avanceGlobal}%</text>
-                    <text x="100" y="112" textAnchor="middle" style={{ fontSize: 9 }} className="fill-slate-400">COMPLETADO</text>
-                  </svg>
-                  <p className="text-xs text-slate-500 mt-2 text-center">
-                    {analitica.totalRecibidos} de {analitica.totalEsperadoDocs} documentos registrados
-                  </p>
-                </div>
-              </Card>
-
-              <Card title="Progreso por tipo de material" subtitle="Recibidos vs faltantes" className="lg:col-span-2">
-                <div className="space-y-4">
-                  {resumenData.map((row) => {
-                    const t = TIPOS.find((x) => x.id === row.id);
-                    return (
-                      <div key={row.id}>
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-1.5">
-                          <span className="flex items-center gap-2 text-sm font-bold text-slate-800">
-                            <span className="h-3 w-3 rounded" style={{ background: t.hex }} />
-                            {row.tipo}
-                          </span>
-                          <div className="flex items-center gap-2 text-[11px] font-mono">
-                            <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                              Completado <b>{row.recibidos}</b> ({row.porcentajeAvance}%)
-                            </span>
-                            <span className="text-red-700 bg-red-50 px-2 py-0.5 rounded-md border border-red-200">
-                              Falta <b>{row.faltantes}</b> ({row.porcentajeFaltante}%)
-                            </span>
-                          </div>
-                        </div>
-                        <div className="w-full h-4 bg-slate-100 rounded-full overflow-hidden flex">
-                          <div
-                            style={{ width: `${row.porcentajeAvance}%` }}
-                            className="bg-emerald-500 transition-all duration-700 flex items-center justify-center text-[10px] text-white font-bold"
-                          >
-                            {row.porcentajeAvance > 7 && `${row.porcentajeAvance}%`}
-                          </div>
-                          <div
-                            style={{ width: `${row.porcentajeFaltante}%` }}
-                            className="bg-red-400 transition-all duration-700 flex items-center justify-center text-[10px] text-white font-bold"
-                          >
-                            {row.porcentajeFaltante > 7 && `${row.porcentajeFaltante}%`}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </Card>
-            </div>
-
-            {/* Análisis intermedio */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <Card title="Recibidos y faltantes por tipo" subtitle="Color = recibidos · Rosado = faltantes">
-                <StackedBars rows={resumenData} />
-              </Card>
-              <Card title="Composición de lo escaneado" subtitle="Participación de cada tipo en el total">
-                <Donut data={donutData} centerTop={analitica.totalRecibidos} centerBottom="documentos" />
-              </Card>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <Card title="Radar de avance" subtitle="Equilibrio entre los 7 tipos de material">
-                <Radar rows={resumenData} />
-              </Card>
-              <Card title="Mesas según documentos recibidos" subtitle="Cuántas mesas tienen 0, 1, 2… 7 tipos de documento">
-                <HBars
-                  items={analitica.buckets.map((b) => ({
-                    label: b.n === TIPOS.length ? `${b.n} (completas)` : `${b.n} ${b.n === 1 ? 'tipo' : 'tipos'}`,
-                    value: b.mesas,
-                    color: b.n === TIPOS.length ? '#059669' : b.n === 0 ? '#dc2626' : '#2563eb',
-                  }))}
-                  suffix=" mesas"
-                  max={Math.max(1, ...analitica.buckets.map((b) => b.mesas))}
-                />
-              </Card>
-            </div>
-
-            {/* Análisis avanzado */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <Card title="Ritmo de escaneo por hora" subtitle="Productividad de la digitación durante el día">
-                <AreaChart points={analitica.puntosHora} />
-              </Card>
-              <Card title="Ranking de distritos" subtitle="% de avance sobre el total esperado (resalta el distrito filtrado)">
-                <div className="max-h-72 overflow-y-auto pr-2">
-                  <HBars items={analitica.rankingDistritos} />
-                </div>
-              </Card>
-            </div>
-
-            <Card title="Mejores locales de votación" subtitle="Top 8 por % de avance dentro del filtro">
-              <HBars items={analitica.rankingLocales} />
-            </Card>
-
-            {/* Mapa de calor */}
+            {/* NUEVO: Checklist de tipos de documento */}
             <Card
-              title="Mapa de calor · Local × Tipo de documento"
-              subtitle="Ordenado de menor a mayor avance para detectar rápido dónde faltan documentos"
+              title="🗂️ Tipos de documento a visualizar"
+              subtitle="Marca solo los que quieres ver en todos los gráficos, tablas y en el Excel"
               right={
-                <div className="hidden sm:flex items-center gap-1 text-[10px] text-slate-500">
-                  {[0, 25, 50, 75, 100].map((p) => (
-                    <span key={p} className="flex items-center gap-1">
-                      <span className="h-3 w-3 rounded" style={{ background: heatColor(p === 0 ? 0 : p) }} />{p}%
-                    </span>
-                  ))}
-                </div>
+                <span className="px-3 py-1 rounded-full text-[11px] font-bold bg-slate-900 text-white">
+                  {nTipos} de {TIPOS.length} seleccionados
+                </span>
               }
             >
-              {analitica.heat.length === 0 ? (
-                <Empty />
-              ) : (
-                <div className="overflow-auto max-h-[28rem] rounded-xl border border-slate-200">
-                  <table className="w-full text-xs">
-                    <thead className="sticky top-0 bg-slate-900 text-white">
-                      <tr>
-                        <th className="p-2.5 text-left font-semibold">Local de votación</th>
-                        <th className="p-2.5 text-center font-semibold">Mesas</th>
-                        {TIPOS.map((t) => (
-                          <th key={t.id} className="p-2.5 text-center font-semibold whitespace-nowrap">{t.short}</th>
-                        ))}
-                        <th className="p-2.5 text-center font-semibold">Prom.</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {analitica.heat.map((h) => (
-                        <tr key={h.local} className="border-t border-slate-100">
-                          <td className="p-2.5 font-semibold text-slate-800 min-w-[200px]">{h.local}</td>
-                          <td className="p-2.5 text-center font-mono text-slate-500">{h.mesas}</td>
-                          {h.celdas.map((c, i) => (
-                            <td key={i} className="p-1">
-                              <div
-                                className="rounded-md py-1.5 text-center font-mono font-bold"
-                                style={{ background: heatColor(c), color: c !== null && c >= 50 && c < 75 ? '#713f12' : c >= 75 ? '#fff' : '#7f1d1d' }}
-                              >
-                                {c === null ? '–' : `${c}%`}
-                              </div>
-                            </td>
-                          ))}
-                          <td className="p-2.5 text-center font-mono font-extrabold text-slate-900">{h.avg}%</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </Card>
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
+                {/* Opción TODOS */}
+                <label
+                  className={`flex items-center gap-2 p-2.5 rounded-xl border-2 cursor-pointer text-xs font-bold transition-all select-none ${
+                    todosMarcados
+                      ? 'bg-slate-900 text-white border-slate-900 shadow'
+                      : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={todosMarcados}
+                    onChange={toggleTodosTipos}
+                    className="h-4 w-4 accent-blue-600 cursor-pointer"
+                  />
+                  TODOS
+                </label>
 
-            {/* Tabla consolidada */}
-            <Card title="Detalle consolidado" subtitle="Cifras exactas por tipo de material">
-              <div className="overflow-x-auto rounded-xl border border-slate-200">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-slate-900 text-white uppercase text-[11px] tracking-wider">
-                    <tr>
-                      <th className="p-3">Tipo de material</th>
-                      <th className="p-3 text-center">Recibidos</th>
-                      <th className="p-3 text-center">% Recibido</th>
-                      <th className="p-3 text-center">Faltantes</th>
-                      <th className="p-3 text-center">% Faltante</th>
-                      <th className="p-3 text-center">Total esperados</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {resumenData.map((row) => {
-                      const t = TIPOS.find((x) => x.id === row.id);
-                      return (
-                        <tr key={row.id} className="hover:bg-slate-50">
-                          <td className="p-3 font-semibold text-slate-800">
-                            <span className="inline-block h-2.5 w-2.5 rounded-full mr-2" style={{ background: t.hex }} />
-                            {row.tipo}
-                          </td>
-                          <td className="p-3 text-center font-mono font-bold text-emerald-600 bg-emerald-50/50">{row.recibidos}</td>
-                          <td className="p-3 text-center font-mono text-emerald-700 font-semibold">{row.porcentajeAvance}%</td>
-                          <td className={`p-3 text-center font-mono font-bold ${row.faltantes > 0 ? 'text-red-600 bg-red-50/50' : 'text-slate-400'}`}>
-                            {row.faltantes}
-                          </td>
-                          <td className="p-3 text-center font-mono text-red-700 font-semibold">{row.porcentajeFaltante}%</td>
-                          <td className="p-3 text-center font-mono text-slate-500">{row.esperados}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                {TIPOS.map((t) => {
+                  const marcado = tiposVisibles.includes(t.id);
+                  return (
+                    <label
+                      key={t.id}
+                      className={`flex items-center gap-2 p-2.5 rounded-xl border-2 cursor-pointer text-xs font-bold transition-all select-none ${
+                        marcado ? 'bg-white shadow' : 'bg-slate-50 text-slate-400 border-slate-200 hover:border-slate-400'
+                      }`}
+                      style={marcado ? { borderColor: t.hex, color: '#0f172a' } : undefined}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={marcado}
+                        onChange={() => toggleTipoVisible(t.id)}
+                        className="h-4 w-4 cursor-pointer"
+                        style={{ accentColor: t.hex }}
+                      />
+                      <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: t.hex }} />
+                      <span className="leading-tight">{t.label}</span>
+                    </label>
+                  );
+                })}
               </div>
             </Card>
+
+            {nTipos === 0 ? (
+              <Card>
+                <Empty text="Selecciona al menos un tipo de documento para visualizar los reportes" />
+              </Card>
+            ) : (
+              <>
+                {/* KPIs */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  <Kpi icon="🧾" label="Mesas esperadas" value={totalMesasEsperadas} sub="según el filtro actual" />
+                  <Kpi icon="✅" label="Documentos recibidos" value={analitica.totalRecibidos} sub={`de ${analitica.totalEsperadoDocs} esperados`} accent="text-emerald-600" />
+                  <Kpi icon="⏳" label="Documentos faltantes" value={analitica.faltantesTotal} sub="suma de los tipos seleccionados" accent="text-red-600" />
+                  <Kpi icon="🏁" label="Mesas completas" value={analitica.mesasCompletas} sub={`con ${nTipos === 1 ? 'el documento' : `los ${nTipos} documentos`} seleccionados`} accent="text-blue-600" />
+                </div>
+
+                {/* Avance global + progreso por tipo */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  <Card title="Avance global" subtitle="Documentos seleccionados combinados" className="lg:col-span-1">
+                    <div className="flex flex-col items-center">
+                      <svg viewBox="0 0 200 120" className="w-full max-w-[280px]">
+                        <path d="M 20 110 A 80 80 0 0 1 180 110" fill="none" stroke="#e2e8f0" strokeWidth="18" strokeLinecap="round" />
+                        <path
+                          d="M 20 110 A 80 80 0 0 1 180 110"
+                          fill="none"
+                          stroke={analitica.avanceGlobal >= 75 ? '#059669' : analitica.avanceGlobal >= 40 ? '#f59e0b' : '#dc2626'}
+                          strokeWidth="18"
+                          strokeLinecap="round"
+                          pathLength="100"
+                          strokeDasharray={`${analitica.avanceGlobal} 100`}
+                          style={{ transition: 'stroke-dasharray 0.8s ease' }}
+                        />
+                        <text x="100" y="95" textAnchor="middle" style={{ fontSize: 34, fontWeight: 800 }} className="fill-slate-900">{analitica.avanceGlobal}%</text>
+                        <text x="100" y="112" textAnchor="middle" style={{ fontSize: 9 }} className="fill-slate-400">COMPLETADO</text>
+                      </svg>
+                      <p className="text-xs text-slate-500 mt-2 text-center">
+                        {analitica.totalRecibidos} de {analitica.totalEsperadoDocs} documentos registrados
+                      </p>
+                    </div>
+                  </Card>
+
+                  <Card title="Progreso por tipo de material" subtitle="Recibidos vs faltantes" className="lg:col-span-2">
+                    <div className="space-y-4">
+                      {resumenVis.map((row) => {
+                        const t = TIPOS.find((x) => x.id === row.id);
+                        return (
+                          <div key={row.id}>
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-1.5">
+                              <span className="flex items-center gap-2 text-sm font-bold text-slate-800">
+                                <span className="h-3 w-3 rounded" style={{ background: t.hex }} />
+                                {row.tipo}
+                              </span>
+                              <div className="flex items-center gap-2 text-[11px] font-mono">
+                                <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                                  Completado <b>{row.recibidos}</b> ({row.porcentajeAvance}%)
+                                </span>
+                                <span className="text-red-700 bg-red-50 px-2 py-0.5 rounded-md border border-red-200">
+                                  Falta <b>{row.faltantes}</b> ({row.porcentajeFaltante}%)
+                                </span>
+                              </div>
+                            </div>
+                            <div className="w-full h-4 bg-slate-100 rounded-full overflow-hidden flex">
+                              <div
+                                style={{ width: `${row.porcentajeAvance}%` }}
+                                className="bg-emerald-500 transition-all duration-700 flex items-center justify-center text-[10px] text-white font-bold"
+                              >
+                                {row.porcentajeAvance > 7 && `${row.porcentajeAvance}%`}
+                              </div>
+                              <div
+                                style={{ width: `${row.porcentajeFaltante}%` }}
+                                className="bg-red-400 transition-all duration-700 flex items-center justify-center text-[10px] text-white font-bold"
+                              >
+                                {row.porcentajeFaltante > 7 && `${row.porcentajeFaltante}%`}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </Card>
+                </div>
+
+                {/* Análisis intermedio */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <Card title="Recibidos y faltantes por tipo" subtitle="Color = recibidos · Rosado = faltantes">
+                    <StackedBars rows={resumenVis} />
+                  </Card>
+                  <Card title="Composición de lo escaneado" subtitle="Participación de cada tipo en el total">
+                    <Donut data={donutData} centerTop={analitica.totalRecibidos} centerBottom="documentos" />
+                  </Card>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <Card title="Radar de avance" subtitle={`Equilibrio entre ${nTipos === 1 ? 'el tipo' : `los ${nTipos} tipos`} de material seleccionados`}>
+                    <Radar rows={resumenVis} />
+                  </Card>
+                  <Card title="Mesas según documentos recibidos" subtitle={`Cuántas mesas tienen 0, 1… ${nTipos} tipo${nTipos === 1 ? '' : 's'} de documento`}>
+                    <HBars
+                      items={analitica.buckets.map((b) => ({
+                        label: b.n === nTipos ? `${b.n} (completas)` : `${b.n} ${b.n === 1 ? 'tipo' : 'tipos'}`,
+                        value: b.mesas,
+                        color: b.n === nTipos ? '#059669' : b.n === 0 ? '#dc2626' : '#2563eb',
+                      }))}
+                      suffix=" mesas"
+                      max={Math.max(1, ...analitica.buckets.map((b) => b.mesas))}
+                    />
+                  </Card>
+                </div>
+
+                {/* Análisis avanzado */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <Card title="Ritmo de escaneo por hora" subtitle="Productividad de la digitación durante el día">
+                    <AreaChart points={analitica.puntosHora} />
+                  </Card>
+                  <Card title="Ranking de distritos" subtitle="% de avance sobre el total esperado (resalta el distrito filtrado)">
+                    <div className="max-h-72 overflow-y-auto pr-2">
+                      <HBars items={analitica.rankingDistritos} />
+                    </div>
+                  </Card>
+                </div>
+
+                <Card title="Mejores locales de votación" subtitle="Top 8 por % de avance dentro del filtro">
+                  <HBars items={analitica.rankingLocales} />
+                </Card>
+
+                {/* Mapa de calor */}
+                <Card
+                  title="Mapa de calor · Local × Tipo de documento"
+                  subtitle="Ordenado de menor a mayor avance para detectar rápido dónde faltan documentos"
+                  right={
+                    <div className="hidden sm:flex items-center gap-1 text-[10px] text-slate-500">
+                      {[0, 25, 50, 75, 100].map((p) => (
+                        <span key={p} className="flex items-center gap-1">
+                          <span className="h-3 w-3 rounded" style={{ background: heatColor(p === 0 ? 0 : p) }} />{p}%
+                        </span>
+                      ))}
+                    </div>
+                  }
+                >
+                  {analitica.heat.length === 0 ? (
+                    <Empty />
+                  ) : (
+                    <div className="overflow-auto max-h-[28rem] rounded-xl border border-slate-200">
+                      <table className="w-full text-xs">
+                        <thead className="sticky top-0 bg-slate-900 text-white">
+                          <tr>
+                            <th className="p-2.5 text-left font-semibold">Local de votación</th>
+                            <th className="p-2.5 text-center font-semibold">Mesas</th>
+                            {tiposActivos.map((t) => (
+                              <th key={t.id} className="p-2.5 text-center font-semibold whitespace-nowrap">{t.short}</th>
+                            ))}
+                            <th className="p-2.5 text-center font-semibold">Prom.</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {analitica.heat.map((h) => (
+                            <tr key={h.local} className="border-t border-slate-100">
+                              <td className="p-2.5 font-semibold text-slate-800 min-w-[200px]">{h.local}</td>
+                              <td className="p-2.5 text-center font-mono text-slate-500">{h.mesas}</td>
+                              {h.celdas.map((c, i) => (
+                                <td key={i} className="p-1">
+                                  <div
+                                    className="rounded-md py-1.5 text-center font-mono font-bold"
+                                    style={{ background: heatColor(c), color: c !== null && c >= 50 && c < 75 ? '#713f12' : c >= 75 ? '#fff' : '#7f1d1d' }}
+                                  >
+                                    {c === null ? '–' : `${c}%`}
+                                  </div>
+                                </td>
+                              ))}
+                              <td className="p-2.5 text-center font-mono font-extrabold text-slate-900">{h.avg}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </Card>
+
+                {/* Tabla consolidada */}
+                <Card title="Detalle consolidado" subtitle="Cifras exactas por tipo de material">
+                  <div className="overflow-x-auto rounded-xl border border-slate-200">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-slate-900 text-white uppercase text-[11px] tracking-wider">
+                        <tr>
+                          <th className="p-3">Tipo de material</th>
+                          <th className="p-3 text-center">Recibidos</th>
+                          <th className="p-3 text-center">% Recibido</th>
+                          <th className="p-3 text-center">Faltantes</th>
+                          <th className="p-3 text-center">% Faltante</th>
+                          <th className="p-3 text-center">Total esperados</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {resumenVis.map((row) => {
+                          const t = TIPOS.find((x) => x.id === row.id);
+                          return (
+                            <tr key={row.id} className="hover:bg-slate-50">
+                              <td className="p-3 font-semibold text-slate-800">
+                                <span className="inline-block h-2.5 w-2.5 rounded-full mr-2" style={{ background: t.hex }} />
+                                {row.tipo}
+                              </td>
+                              <td className="p-3 text-center font-mono font-bold text-emerald-600 bg-emerald-50/50">{row.recibidos}</td>
+                              <td className="p-3 text-center font-mono text-emerald-700 font-semibold">{row.porcentajeAvance}%</td>
+                              <td className={`p-3 text-center font-mono font-bold ${row.faltantes > 0 ? 'text-red-600 bg-red-50/50' : 'text-slate-400'}`}>
+                                {row.faltantes}
+                              </td>
+                              <td className="p-3 text-center font-mono text-red-700 font-semibold">{row.porcentajeFaltante}%</td>
+                              <td className="p-3 text-center font-mono text-slate-500">{row.esperados}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              </>
+            )}
 
           </div>
         )}
