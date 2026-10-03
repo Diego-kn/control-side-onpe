@@ -265,12 +265,13 @@ export default function Home() {
   const inputRef = useRef(null);
   const ultimoTimestampRef = useRef(0); // persiste al cambiar de tipo de documento
 
-  // Inicializar o leer el ID único de la laptop
+  // Identificar esta computadora (se pregunta una sola vez y queda guardado)
   useEffect(() => {
     let cid = localStorage.getItem('MY_LAPTOP_ID');
-    if (!cid) {
-      cid = 'laptop_' + Math.random().toString(36).substring(2, 9);
-      localStorage.setItem('MY_LAPTOP_ID', cid);
+    if (!cid || !cid.startsWith('laptop_') || cid.length > 12) {
+      const resp = window.prompt('¿Qué computadora es esta? Escribe: laptop_1 o laptop_2');
+      cid = (resp || '').trim().toLowerCase();
+      if (cid) localStorage.setItem('MY_LAPTOP_ID', cid);
     }
     setMyClientId(cid);
   }, []);
@@ -326,34 +327,25 @@ export default function Home() {
     }
   }, [vista, filtroDistrito, filtroLocal, maestroMesas]);
 
-  // CONSULTAR API DE ESCANEO CONTINUAMENTE (POLLING DESDE TAMPERMONKEY)
+  // CONSULTAR API DE ESCANEO (solo los escaneos de ESTA computadora)
   useEffect(() => {
+    if (!myClientId) return;
+
     const interval = setInterval(async () => {
       try {
-        const res = await fetch('/api/escaneo');
+        const res = await fetch(`/api/escaneo?clientId=${encodeURIComponent(myClientId)}`, { cache: 'no-store' });
         const data = await res.json();
 
         if (data.escaneo && data.escaneo.timestamp > ultimoTimestampRef.current) {
           ultimoTimestampRef.current = data.escaneo.timestamp;
 
-          // Ignorar escaneo si viene de otra laptop/dispositivo
-          if (data.escaneo.clientId && data.escaneo.clientId !== myClientId) {
-            console.log("ℹ️ Escaneo ignorado (pertenece a otro equipo):", data.escaneo.clientId);
-            return;
-          }
-
-          console.log("📥 Código recibido en Vercel vía API:", data.escaneo.codigo);
-
-          // Actualiza el campo de texto en pantalla
           setCodigoInput(data.escaneo.codigo);
-
-          // Dispara la función que procesa y guarda el registro
           ejecutarRegistro(data.escaneo.codigo, tipoSeleccionado);
         }
       } catch (err) {
         console.error("Error al consultar /api/escaneo:", err);
       }
-    }, 400); // Revisa si hay código nuevo cada 400 ms
+    }, 400);
 
     return () => clearInterval(interval);
   }, [tipoSeleccionado, myClientId]);
