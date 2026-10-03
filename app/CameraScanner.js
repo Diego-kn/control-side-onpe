@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 
 export default function CameraScanner({ onScan, onClose }) {
-  // Siempre apunta a la versión más reciente de onScan (evita datos viejos)
   const onScanRef = useRef(onScan);
   onScanRef.current = onScan;
 
@@ -11,6 +10,7 @@ export default function CameraScanner({ onScan, onClose }) {
   const [estado, setEstado] = useState('iniciando'); // iniciando | activa | error
   const [error, setError] = useState('');
   const [ultimo, setUltimo] = useState('');
+  const [ignorado, setIgnorado] = useState('');
 
   useEffect(() => {
     let scanner = null;
@@ -19,43 +19,82 @@ export default function CameraScanner({ onScan, onClose }) {
 
     (async () => {
       try {
-        const { Html5Qrcode } = await import('html5-qrcode');
+        const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode');
         if (cancelado) return;
+
+        // SOLO códigos de barras lineales (se ignoran los QR)
+        const formatos = [
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.CODE_93,
+          Html5QrcodeSupportedFormats.ITF,
+          Html5QrcodeSupportedFormats.CODABAR,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+        ];
 
         scanner = new Html5Qrcode(regionId, {
           verbose: false,
-          useBarCodeDetectorIfSupported: true, // usa el detector nativo de Android si existe (mejor para barras)
+          formatsToSupport: formatos,
+          useBarCodeDetectorIfSupported: true,
         });
 
         await scanner.start(
-          { facingMode: 'environment' }, // cámara trasera
+          { facingMode: 'environment' },
           {
-            fps: 10,
-            qrbox: (w, h) => ({
-              width: Math.floor(w * 0.9),
-              height: Math.floor(Math.max(80, Math.min(h * 0.6, w * 0.45))),
+            fps: 15,
+            // Zona ancha y baja: ideal para códigos de barras
+            qrbox: (w) => ({
+              width: Math.floor(w * 0.92),
+              height: Math.floor(Math.max(90, w * 0.32)),
             }),
+            videoConstraints: {
+              facingMode: 'environment',
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
           },
           (texto) => {
             const code = (texto || '').trim();
             if (!code) return;
 
-            // Evita leer el mismo código muchas veces seguidas
+            // Si por alguna razón llega un enlace/QR, se ignora sin mostrar error
+            const low = code.toLowerCase();
+            if (low.startsWith('http') || low.includes('www.') || low.includes('.pe') || low.includes('.com')) {
+              setIgnorado(code);
+              return;
+            }
+
             const ahora = Date.now();
             if (ultimoRef.current.code === code && ahora - ultimoRef.current.t < 3000) return;
             ultimoRef.current = { code, t: ahora };
 
             if (navigator.vibrate) navigator.vibrate(100);
+            setIgnorado('');
             setUltimo(code);
             onScanRef.current(code);
           },
-          () => {} // errores de lectura por frame: se ignoran
+          () => {}
         );
 
         if (cancelado) {
           await scanner.stop().catch(() => {});
           return;
         }
+
+        // Intenta activar enfoque continuo (si el celular lo permite)
+        try {
+          const track = scanner.getRunningTrackCameraCapabilities
+            ? null
+            : null;
+          const video = document.querySelector('#lector-camara video');
+          const t = video?.srcObject?.getVideoTracks?.()[0];
+          const caps = t?.getCapabilities?.();
+          if (t && caps?.focusMode?.includes('continuous')) {
+            await t.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+          }
+        } catch (_) {}
+
         setEstado('activa');
       } catch (e) {
         if (cancelado) return;
@@ -97,15 +136,17 @@ export default function CameraScanner({ onScan, onClose }) {
       )}
 
       {estado === 'activa' && (
-        <p className="text-xs text-slate-500 text-center">
-          Apunta al código de barras o QR. Se registra automáticamente.
+        <div className="text-xs text-slate-500 text-center space-y-1">
+          <p>Apunta SOLO al código de barras (no al QR). Se registra automáticamente.</p>
           {ultimo && (
-            <>
-              <br />
+            <p>
               Último leído: <b className="font-mono text-slate-800">{ultimo}</b>
-            </>
+            </p>
           )}
-        </p>
+          {ignorado && (
+            <p className="text-amber-600 font-semibold">QR/enlace ignorado. Apunta al código de barras.</p>
+          )}
+        </div>
       )}
 
       <button
