@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import * as XLSX from 'xlsx';
 import CameraScanner from './CameraScanner';
+import GestorRegistros from './GestorRegistros';
 
 const TIPOS = [
   { id: 'ACTA_ROJA', label: 'Acta ROJA', short: 'Roja', hex: '#dc2626', color: 'bg-red-600 text-white', badge: 'bg-red-50 text-red-700 border-red-200' },
@@ -240,6 +241,29 @@ export default function Home() {
   const [ultimosRegistros, setUltimosRegistros] = useState([]);
    // 'manual' = lector/teclado | 'camara' = cámara del celular
   const [modoEntrada, setModoEntrada] = useState('manual');
+    // Restricciones de formato por tipo de documento (true = validar, false = sin restricción)
+  const [restricciones, setRestricciones] = useState(() =>
+    Object.fromEntries(TIPOS.map((t) => [t.id, true]))
+  );
+  const restriccionesRef = useRef(restricciones);
+  restriccionesRef.current = restricciones;
+
+  useEffect(() => {
+    try {
+      const s = localStorage.getItem('RESTRICCIONES');
+      if (s) setRestricciones((p) => ({ ...p, ...JSON.parse(s) }));
+    } catch (_) {}
+  }, []);
+
+  const guardarRestricciones = (nuevo) => {
+    setRestricciones(nuevo);
+    try { localStorage.setItem('RESTRICCIONES', JSON.stringify(nuevo)); } catch (_) {}
+  };
+  const toggleRestriccion = (id) =>
+    guardarRestricciones({ ...restricciones, [id]: restricciones[id] === false });
+  const todasActivas = TIPOS.every((t) => restricciones[t.id] !== false);
+  const toggleTodasRestricciones = () =>
+    guardarRestricciones(Object.fromEntries(TIPOS.map((t) => [t.id, !todasActivas])));
 
   // Identificador de la laptop local
   const [myClientId, setMyClientId] = useState('');
@@ -326,7 +350,7 @@ export default function Home() {
     if (vista === 'registro') {
       inputRef.current?.focus();
       cargarUltimos();
-    } else {
+    } else if (vista === 'reportes') {
       cargarReporte();
     }
   }, [vista, filtroDistrito, filtroLocal, maestroMesas]);
@@ -534,42 +558,53 @@ export default function Home() {
   };
 
   // LÓGICA DE REGISTRO REUTILIZABLE
-  const ejecutarRegistro = async (codigo, tipoDoc) => {
+    const ejecutarRegistro = async (codigo, tipoDoc) => {
     if (!codigo) return;
 
     const codigoUpper = codigo.trim().toUpperCase();
     const codigoLower = codigo.trim().toLowerCase();
+    const conRestriccion = restriccionesRef.current[tipoDoc] !== false;
 
-    // 1. VALIDACIÓN GENERAL
-    const esLink =
-      codigoLower.startsWith('http') ||
-      codigoLower.includes('www.') ||
-      codigoLower.includes('.gob.pe') ||
-      codigoLower.includes('.com') ||
-      codigoLower.includes('.pe');
-
-    if (esLink || codigoUpper.length < 6) {
+    if (!codigoUpper) {
       playBeep(false);
-      setMensaje({
-        tipo: 'error',
-        texto: `❌ CÓDIGO INVÁLIDO: Formato no permitido o QR web detectado.`
-      });
+      setMensaje({ tipo: 'error', texto: '❌ CÓDIGO VACÍO.' });
       setCodigoInput('');
       inputRef.current?.focus();
       return;
     }
 
-    // 2. VALIDACIÓN ESPECÍFICA POR TIPO SELECCIONADO
-    const errorFormato = validarFormatoCodigo(codigoUpper, tipoDoc);
-    if (errorFormato) {
-      playBeep(false);
-      setMensaje({
-        tipo: 'error',
-        texto: `🚫 TIPO INCORRECTO: ${errorFormato}`
-      });
-      setCodigoInput('');
-      inputRef.current?.focus();
-      return;
+    if (conRestriccion) {
+      // 1. VALIDACIÓN GENERAL
+      const esLink =
+        codigoLower.startsWith('http') ||
+        codigoLower.includes('www.') ||
+        codigoLower.includes('.gob.pe') ||
+        codigoLower.includes('.com') ||
+        codigoLower.includes('.pe');
+
+      if (esLink || codigoUpper.length < 6) {
+        playBeep(false);
+        setMensaje({
+          tipo: 'error',
+          texto: `❌ CÓDIGO INVÁLIDO: Formato no permitido o QR web detectado.`
+        });
+        setCodigoInput('');
+        inputRef.current?.focus();
+        return;
+      }
+
+      // 2. VALIDACIÓN ESPECÍFICA POR TIPO SELECCIONADO
+      const errorFormato = validarFormatoCodigo(codigoUpper, tipoDoc);
+      if (errorFormato) {
+        playBeep(false);
+        setMensaje({
+          tipo: 'error',
+          texto: `🚫 TIPO INCORRECTO: ${errorFormato}`
+        });
+        setCodigoInput('');
+        inputRef.current?.focus();
+        return;
+      }
     }
 
     // EXTRAER LOS 6 PRIMEROS DÍGITOS PARA LA MESA
@@ -582,14 +617,14 @@ export default function Home() {
       .from('locales_mesas')
       .select('local_votacion, distrito')
       .eq('numero_mesa', mesa)
-      .single();
+      .maybeSingle();
 
     if (localData) {
       localVotacion = localData.local_votacion.toUpperCase();
       distrito = localData.distrito.toUpperCase();
     }
 
-    // INSERTAR EN SUPABASE
+    // INSERTAR EN SUPABASE (el duplicado lo bloquea la base de datos siempre)
     const { error } = await supabase
       .from('registros')
       .insert([
@@ -603,18 +638,17 @@ export default function Home() {
       ]);
 
     if (error) {
+      playBeep(false);
       if (error.code === '23505') {
-        playBeep(false);
         setMensaje({ tipo: 'error', texto: `⚠️ ¡DUPLICADO! El código "${codigoUpper}" ya fue registrado.` });
       } else {
-        playBeep(false);
         setMensaje({ tipo: 'error', texto: `Error: ${error.message}` });
       }
     } else {
       playBeep(true);
       setMensaje({
         tipo: 'exito',
-        texto: `✅ MESA ${mesa} | LOCAL: ${localVotacion} (${distrito}) | ${tipoDoc}`
+        texto: `✅ MESA ${mesa} | LOCAL: ${localVotacion} (${distrito}) | ${tipoDoc}${conRestriccion ? '' : ' | ⚠️ sin restricciones'}`
       });
       cargarUltimos();
     }
@@ -800,6 +834,7 @@ export default function Home() {
           <nav className="flex gap-1 bg-white/10 p-1 rounded-xl self-start sm:self-auto">
             {[
               { id: 'registro', label: '📷 Registro' },
+              { id: 'registros', label: '🗂️ Gestionar registros' },
               { id: 'reportes', label: '📊 Reportes y Gráficos' },
             ].map((tab) => (
               <button
@@ -855,6 +890,51 @@ export default function Home() {
                     );
                   })}
                 </div>
+              </Card>
+                            {/* Restricciones de validación */}
+              <Card
+                title="🛡️ Restricciones de validación"
+                subtitle="Marcado = valida el formato del código · Desmarcado = acepta cualquier código"
+                right={
+                  <span className={`px-3 py-1 rounded-full text-[11px] font-bold ${todasActivas ? 'bg-emerald-600 text-white' : 'bg-amber-500 text-white'}`}>
+                    {todasActivas ? 'Todas activas' : 'Hay restricciones desactivadas'}
+                  </span>
+                }
+              >
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <label
+                    className={`flex items-center gap-2 p-2.5 rounded-xl border-2 cursor-pointer text-xs font-bold transition-all select-none ${
+                      todasActivas ? 'bg-slate-900 text-white border-slate-900 shadow' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                    }`}
+                  >
+                    <input type="checkbox" checked={todasActivas} onChange={toggleTodasRestricciones} className="h-4 w-4 accent-blue-600 cursor-pointer" />
+                    TODAS
+                  </label>
+                  {TIPOS.map((t) => {
+                    const activa = restricciones[t.id] !== false;
+                    return (
+                      <label
+                        key={t.id}
+                        className={`flex items-center gap-2 p-2.5 rounded-xl border-2 cursor-pointer text-xs font-bold transition-all select-none ${
+                          activa ? 'bg-white shadow' : 'bg-amber-50 text-amber-700 border-amber-300'
+                        }`}
+                        style={activa ? { borderColor: t.hex, color: '#0f172a' } : undefined}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={activa}
+                          onChange={() => toggleRestriccion(t.id)}
+                          className="h-4 w-4 cursor-pointer"
+                          style={{ accentColor: t.hex }}
+                        />
+                        <span className="leading-tight">{t.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-slate-400 mt-3">
+                  El control de <b>duplicados</b> siempre está activo. Si registras algo mal sin restricciones, corrígelo en <b>🗂️ Gestionar registros</b>.
+                </p>
               </Card>
 
               {/* Paso 2 */}
@@ -913,6 +993,11 @@ export default function Home() {
                 ) : (
                   <CameraScanner
                     onScan={(codigo) => ejecutarRegistro(codigo, tipoSeleccionado)}
+                    validar={(codigo) =>
+                      restricciones[tipoSeleccionado] === false
+                        ? null
+                        : validarFormatoCodigo(codigo.toUpperCase(), tipoSeleccionado)
+                    }
                     onClose={() => setModoEntrada('manual')}
                   />
                 )}
@@ -1288,6 +1373,17 @@ export default function Home() {
             )}
 
           </div>
+        )}
+        
+        {/* ============================================================
+            VISTA 3: GESTIONAR REGISTROS (editar / eliminar / buscar)
+            ============================================================ */}
+        {vista === 'registros' && (
+          <GestorRegistros
+            tipos={TIPOS}
+            maestroMesas={maestroMesas}
+            distritos={distritosUnicos}
+          />
         )}
       </main>
 
