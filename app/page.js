@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import * as XLSX from 'xlsx';
+import CameraScanner from './CameraScanner';
 
 const TIPOS = [
   { id: 'ACTA_ROJA', label: 'Acta ROJA', short: 'Roja', hex: '#dc2626', color: 'bg-red-600 text-white', badge: 'bg-red-50 text-red-700 border-red-200' },
@@ -237,6 +238,8 @@ export default function Home() {
   const [codigoInput, setCodigoInput] = useState('');
   const [mensaje, setMensaje] = useState(null);
   const [ultimosRegistros, setUltimosRegistros] = useState([]);
+   // 'manual' = lector/teclado | 'camara' = cámara del celular
+  const [modoEntrada, setModoEntrada] = useState('manual');
 
   // Identificador de la laptop local
   const [myClientId, setMyClientId] = useState('');
@@ -264,6 +267,7 @@ export default function Home() {
   const audioUnlockedRef = useRef(false);
   const inputRef = useRef(null);
   const ultimoTimestampRef = useRef(0); // persiste al cambiar de tipo de documento
+  const sincronizadoRef = useRef(false); // evita registrar un escaneo viejo al abrir la página
 
   // Identificar esta computadora (se pregunta una sola vez y queda guardado)
   useEffect(() => {
@@ -336,6 +340,13 @@ export default function Home() {
         const res = await fetch(`/api/escaneo?clientId=${encodeURIComponent(myClientId)}`, { cache: 'no-store' });
         const data = await res.json();
 
+        // Primera consulta: solo memoriza el último escaneo existente, sin registrarlo
+        if (!sincronizadoRef.current) {
+          sincronizadoRef.current = true;
+          if (data.escaneo) ultimoTimestampRef.current = data.escaneo.timestamp;
+          return;
+        }
+
         if (data.escaneo && data.escaneo.timestamp > ultimoTimestampRef.current) {
           ultimoTimestampRef.current = data.escaneo.timestamp;
 
@@ -343,7 +354,7 @@ export default function Home() {
           ejecutarRegistro(data.escaneo.codigo, tipoSeleccionado);
         }
       } catch (err) {
-        console.error("Error al consultar /api/escaneo:", err);
+        console.error('Error al consultar /api/escaneo:', err);
       }
     }, 400);
 
@@ -847,31 +858,64 @@ export default function Home() {
               </Card>
 
               {/* Paso 2 */}
-              <Card title="2 · Escanear código de barras" subtitle="El cursor permanece activo para el lector">
-                <form onSubmit={procesarEscaneo}>
-                  <div className="relative">
-                    <svg
-                      className="absolute left-4 top-1/2 -translate-y-1/2 h-7 w-7 text-slate-400 pointer-events-none"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                    >
-                      <path d="M4 5v14M8 5v14M12 5v14M16 5v14M20 5v14" />
-                      <path d="M6 5v14" strokeWidth="1" />
-                    </svg>
-                    <input
-                      ref={inputRef}
-                      type="text"
-                      value={codigoInput}
-                      onChange={(e) => setCodigoInput(e.target.value)}
-                      placeholder="Escanea aquí..."
-                      className="w-full text-2xl font-mono pl-16 pr-4 py-5 bg-slate-50 border-2 border-slate-300 rounded-xl focus:border-blue-600 focus:bg-white focus:ring-4 focus:ring-blue-100 focus:outline-none transition"
-                      autoFocus
-                    />
-                  </div>
-                </form>
+                            <Card title="2 · Escanear código de barras o QR" subtitle="Elige cómo quieres ingresar el código">
+                {/* Selector de modo */}
+                <div className="grid grid-cols-2 gap-2 mb-4">
+                  <button
+                    type="button"
+                    onClick={() => { setModoEntrada('manual'); setTimeout(() => inputRef.current?.focus(), 100); }}
+                    className={`py-2.5 rounded-xl text-sm font-bold border-2 transition-all ${
+                      modoEntrada === 'manual'
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                    }`}
+                  >
+                    ⌨️ Manual / Lector
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModoEntrada('camara')}
+                    className={`py-2.5 rounded-xl text-sm font-bold border-2 transition-all ${
+                      modoEntrada === 'camara'
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                    }`}
+                  >
+                    📷 Usar cámara
+                  </button>
+                </div>
+
+                {modoEntrada === 'manual' ? (
+                  <form onSubmit={procesarEscaneo}>
+                    <div className="relative">
+                      <svg
+                        className="absolute left-4 top-1/2 -translate-y-1/2 h-7 w-7 text-slate-400 pointer-events-none"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                      >
+                        <path d="M4 5v14M8 5v14M12 5v14M16 5v14M20 5v14" />
+                        <path d="M6 5v14" strokeWidth="1" />
+                      </svg>
+                      <input
+                        ref={inputRef}
+                        type="text"
+                        value={codigoInput}
+                        onChange={(e) => setCodigoInput(e.target.value)}
+                        placeholder="Escanea aquí..."
+                        className="w-full text-2xl font-mono pl-16 pr-4 py-5 bg-slate-50 border-2 border-slate-300 rounded-xl focus:border-blue-600 focus:bg-white focus:ring-4 focus:ring-blue-100 focus:outline-none transition"
+                        autoFocus
+                      />
+                    </div>
+                  </form>
+                ) : (
+                  <CameraScanner
+                    onScan={(codigo) => ejecutarRegistro(codigo, tipoSeleccionado)}
+                    onClose={() => setModoEntrada('manual')}
+                  />
+                )}
 
                 {mensaje ? (
                   <div
