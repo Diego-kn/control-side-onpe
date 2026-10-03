@@ -1,32 +1,55 @@
 import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
 
-// Un último escaneo POR computadora (clave = clientId)
-const escaneos = {};
+const sb = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+);
 
 export async function POST(request) {
   try {
     const body = await request.json();
-    if (body.codigo) {
-      const clientId = body.clientId || 'desconocido';
-      escaneos[clientId] = {
-        codigo: body.codigo,
-        clientId,
-        timestamp: Date.now(),
-      };
-      return NextResponse.json({ success: true, codigo: body.codigo, clientId });
+    if (!body.codigo) {
+      return NextResponse.json(
+        { success: false, error: 'Código no proporcionado' },
+        { status: 400 }
+      );
     }
-    return NextResponse.json({ success: false, error: 'Código no proporcionado' }, { status: 400 });
+
+    const clientId = body.clientId || 'desconocido';
+
+    const { error } = await sb.from('escaneos_pendientes').upsert({
+      client_id: clientId,
+      codigo: body.codigo,
+      timestamp: Date.now(),
+    });
+
+    if (error) throw new Error(error.message);
+
+    return NextResponse.json({ success: true, codigo: body.codigo, clientId });
   } catch (err) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
 
 export async function GET(request) {
-  const { searchParams } = new URL(request.url);
-  const clientId = searchParams.get('clientId');
-  // Solo devuelve el escaneo de ESA computadora
-  const escaneo = clientId ? escaneos[clientId] || null : null;
+  const clientId = new URL(request.url).searchParams.get('clientId');
+
+  if (!clientId) {
+    return NextResponse.json({ escaneo: null }, { headers: { 'Cache-Control': 'no-store' } });
+  }
+
+  const { data } = await sb
+    .from('escaneos_pendientes')
+    .select('*')
+    .eq('client_id', clientId)
+    .maybeSingle();
+
+  const escaneo = data
+    ? { codigo: data.codigo, clientId: data.client_id, timestamp: Number(data.timestamp) }
+    : null;
+
   return NextResponse.json({ escaneo }, { headers: { 'Cache-Control': 'no-store' } });
 }
