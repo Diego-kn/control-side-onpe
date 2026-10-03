@@ -2,27 +2,77 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+// Elige la mejor cámara trasera de la lista
+function elegirCamaraTrasera(cams) {
+  if (!cams.length) return null;
+  const guardada = (() => {
+    try { return localStorage.getItem('CAM_ID'); } catch { return null; }
+  })();
+  if (guardada && cams.some((c) => c.id === guardada)) return guardada;
+
+  const esTrasera = (c) => /back|rear|trasera|posterior|environment|0, facing back/i.test(c.label || '');
+  const esExtra = (c) => /wide|ultra|macro|depth|tele|zoom|front|frontal|user/i.test(c.label || '');
+
+  const traseras = cams.filter(esTrasera);
+  const principal = traseras.find((c) => !esExtra(c)) || traseras[0];
+  if (principal) return principal.id;
+
+  // Sin etiquetas útiles: normalmente la última de la lista es la trasera
+  return cams[cams.length - 1].id;
+}
+
 export default function CameraScanner({ onScan, onClose }) {
   const onScanRef = useRef(onScan);
   onScanRef.current = onScan;
 
   const ultimoRef = useRef({ code: '', t: 0 });
+  const [camaras, setCamaras] = useState([]);
+  const [camaraId, setCamaraId] = useState(null);
   const [estado, setEstado] = useState('iniciando'); // iniciando | activa | error
   const [error, setError] = useState('');
   const [ultimo, setUltimo] = useState('');
   const [ignorado, setIgnorado] = useState('');
 
+  // 1) Listar cámaras (pide permiso la primera vez)
   useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      try {
+        const { Html5Qrcode } = await import('html5-qrcode');
+        const cams = await Html5Qrcode.getCameras();
+        if (cancelado) return;
+        if (!cams || !cams.length) {
+          setEstado('error');
+          setError('No se encontró ninguna cámara.');
+          return;
+        }
+        setCamaras(cams);
+        setCamaraId(elegirCamaraTrasera(cams));
+      } catch (e) {
+        if (cancelado) return;
+        setEstado('error');
+        setError(
+          String(e).includes('Permission')
+            ? 'Permiso de cámara denegado. Actívalo en la configuración del navegador y vuelve a intentar.'
+            : 'No se pudo acceder a las cámaras: ' + (e?.message || e)
+        );
+      }
+    })();
+    return () => { cancelado = true; };
+  }, []);
+
+  // 2) Iniciar el lector con la cámara elegida (se reinicia al cambiarla)
+  useEffect(() => {
+    if (!camaraId) return;
     let scanner = null;
     let cancelado = false;
-    const regionId = 'lector-camara';
+    setEstado('iniciando');
 
     (async () => {
       try {
         const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode');
         if (cancelado) return;
 
-        // SOLO códigos de barras lineales (se ignoran los QR)
         const formatos = [
           Html5QrcodeSupportedFormats.CODE_128,
           Html5QrcodeSupportedFormats.CODE_39,
@@ -33,23 +83,22 @@ export default function CameraScanner({ onScan, onClose }) {
           Html5QrcodeSupportedFormats.EAN_8,
         ];
 
-        scanner = new Html5Qrcode(regionId, {
+        scanner = new Html5Qrcode('lector-camara', {
           verbose: false,
           formatsToSupport: formatos,
           useBarCodeDetectorIfSupported: true,
         });
 
         await scanner.start(
-          { facingMode: 'environment' },
+          { deviceId: { exact: camaraId } },
           {
             fps: 15,
-            // Zona ancha y baja: ideal para códigos de barras
             qrbox: (w) => ({
               width: Math.floor(w * 0.92),
               height: Math.floor(Math.max(90, w * 0.32)),
             }),
             videoConstraints: {
-              facingMode: 'environment',
+              deviceId: { exact: camaraId },
               width: { ideal: 1920 },
               height: { ideal: 1080 },
             },
@@ -58,7 +107,6 @@ export default function CameraScanner({ onScan, onClose }) {
             const code = (texto || '').trim();
             if (!code) return;
 
-            // Si por alguna razón llega un enlace/QR, se ignora sin mostrar error
             const low = code.toLowerCase();
             if (low.startsWith('http') || low.includes('www.') || low.includes('.pe') || low.includes('.com')) {
               setIgnorado(code);
@@ -82,11 +130,8 @@ export default function CameraScanner({ onScan, onClose }) {
           return;
         }
 
-        // Intenta activar enfoque continuo (si el celular lo permite)
+        // Enfoque continuo si el celular lo permite
         try {
-          const track = scanner.getRunningTrackCameraCapabilities
-            ? null
-            : null;
           const video = document.querySelector('#lector-camara video');
           const t = video?.srcObject?.getVideoTracks?.()[0];
           const caps = t?.getCapabilities?.();
@@ -95,28 +140,30 @@ export default function CameraScanner({ onScan, onClose }) {
           }
         } catch (_) {}
 
+        try { localStorage.setItem('CAM_ID', camaraId); } catch (_) {}
         setEstado('activa');
       } catch (e) {
         if (cancelado) return;
         setEstado('error');
-        setError(
-          String(e).includes('Permission')
-            ? 'Permiso de cámara denegado. Actívalo en la configuración del navegador y vuelve a intentar.'
-            : 'No se pudo abrir la cámara: ' + (e?.message || e)
-        );
+        setError('No se pudo abrir la cámara: ' + (e?.message || e));
       }
     })();
 
     return () => {
       cancelado = true;
       if (scanner) {
-        scanner
-          .stop()
-          .then(() => scanner.clear())
-          .catch(() => {});
+        scanner.stop().then(() => scanner.clear()).catch(() => {});
       }
     };
-  }, []);
+  }, [camaraId]);
+
+  const cambiarCamara = () => {
+    if (camaras.length < 2) return;
+    const i = camaras.findIndex((c) => c.id === camaraId);
+    setCamaraId(camaras[(i + 1) % camaras.length].id);
+  };
+
+  const camActual = camaras.find((c) => c.id === camaraId);
 
   return (
     <div className="space-y-3">
@@ -138,6 +185,7 @@ export default function CameraScanner({ onScan, onClose }) {
       {estado === 'activa' && (
         <div className="text-xs text-slate-500 text-center space-y-1">
           <p>Apunta SOLO al código de barras (no al QR). Se registra automáticamente.</p>
+          {camActual?.label && <p className="text-slate-400">Cámara: {camActual.label}</p>}
           {ultimo && (
             <p>
               Último leído: <b className="font-mono text-slate-800">{ultimo}</b>
@@ -149,13 +197,23 @@ export default function CameraScanner({ onScan, onClose }) {
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={onClose}
-        className="w-full py-2.5 rounded-xl bg-slate-800 text-white text-sm font-bold"
-      >
-        ✖ Cerrar cámara
-      </button>
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={cambiarCamara}
+          disabled={camaras.length < 2}
+          className="py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-40"
+        >
+          🔄 Cambiar cámara
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="py-2.5 rounded-xl bg-slate-800 text-white text-sm font-bold"
+        >
+          ✖ Cerrar cámara
+        </button>
+      </div>
     </div>
   );
 }
