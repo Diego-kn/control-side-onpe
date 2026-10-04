@@ -20,6 +20,7 @@ const fechaStr = (offset = 0) => {
 const FILTROS_INICIALES = {
   q: '',
   tipo: 'TODOS',
+  eleccion: 'TODAS',
   distrito: 'TODOS',
   local: 'TODOS',
   desde: '',
@@ -27,7 +28,7 @@ const FILTROS_INICIALES = {
   orden: 'recientes',
 };
 
-export default function GestorRegistros({ tipos, maestroMesas, distritos }) {
+export default function GestorRegistros({ tipos, maestroMesas, distritos, elecciones, tiposPorEleccion }) {
   const [filtros, setFiltros] = useState(FILTROS_INICIALES);
   const [pagina, setPagina] = useState(1);
   const [filas, setFilas] = useState([]);
@@ -62,6 +63,7 @@ export default function GestorRegistros({ tipos, maestroMesas, distritos }) {
     const q = filtros.q.trim().replace(/[,()%]/g, '');
     if (q) query = query.or(`codigo_barras.ilike.%${q}%,numero_mesa.ilike.%${q}%`);
     if (filtros.tipo !== 'TODOS') query = query.eq('tipo_documento', filtros.tipo);
+    if (filtros.eleccion !== 'TODAS') query = query.eq('tipo_eleccion', filtros.eleccion);
     if (filtros.distrito !== 'TODOS') query = query.eq('distrito', filtros.distrito);
     if (filtros.local !== 'TODOS') query = query.eq('local_votacion', filtros.local);
     if (filtros.desde) query = query.gte('fecha_registro', new Date(`${filtros.desde}T00:00:00`).toISOString());
@@ -129,6 +131,7 @@ export default function GestorRegistros({ tipos, maestroMesas, distritos }) {
       tipo_documento: r.tipo_documento,
       local_votacion: r.local_votacion || '',
       distrito: r.distrito || '',
+      tipo_eleccion: r.tipo_eleccion || 'GENERAL',
       fecha: aLocalInput(r.fecha_registro),
       recalc: true,
     });
@@ -152,6 +155,9 @@ export default function GestorRegistros({ tipos, maestroMesas, distritos }) {
       local = m ? m.local_votacion.toUpperCase() : 'LOCAL DESCONOCIDO';
       dist = m ? m.distrito.toUpperCase() : 'NO ASIGNADO';
     }
+    const eleccionFinal = tiposPorEleccion.includes(editando.tipo_documento)
+      ? (editando.tipo_eleccion === 'GENERAL' ? 'MUNICIPAL' : editando.tipo_eleccion)
+      : 'GENERAL';
 
     const cambios = {
       codigo_barras: codigo,
@@ -159,6 +165,7 @@ export default function GestorRegistros({ tipos, maestroMesas, distritos }) {
       tipo_documento: editando.tipo_documento,
       local_votacion: local,
       distrito: dist,
+      tipo_eleccion: eleccionFinal,
     };
     if (editando.fecha) cambios.fecha_registro = new Date(editando.fecha).toISOString();
 
@@ -166,7 +173,7 @@ export default function GestorRegistros({ tipos, maestroMesas, distritos }) {
     setGuardando(false);
 
     if (error) {
-      if (error.code === '23505') return mostrar('error', `⚠️ DUPLICADO: el código "${codigo}" ya existe en otro registro.`);
+      if (error.code === '23505') return mostrar('error', `⚠️ DUPLICADO: el código "${codigo}" ya existe en esa elección.`);      
       return mostrar('error', 'No se pudo guardar: ' + error.message);
     }
     if (!data || data.length === 0) {
@@ -248,6 +255,16 @@ export default function GestorRegistros({ tipos, maestroMesas, distritos }) {
             </select>
           </div>
           <div>
+            <label className={etiqueta}>Elección</label>
+            <select value={filtros.eleccion} onChange={(e) => setFiltro('eleccion', e.target.value)} className={campo}>
+              <option value="TODAS">TODAS</option>
+              {elecciones.map((e) => (
+                <option key={e.id} value={e.id}>{e.label}</option>
+              ))}
+              <option value="GENERAL">Sin elección (cédulas, listas)</option>
+            </select>
+          </div>
+          <div>
             <label className={etiqueta}>Ordenar por</label>
             <select value={filtros.orden} onChange={(e) => setFiltro('orden', e.target.value)} className={campo}>
               <option value="recientes">Más recientes primero</option>
@@ -317,6 +334,7 @@ export default function GestorRegistros({ tipos, maestroMesas, distritos }) {
                 <th className="p-3">Código</th>
                 <th className="p-3">Mesa</th>
                 <th className="p-3">Tipo</th>
+                <th className="p-3">Elección</th>
                 <th className="p-3">Local</th>
                 <th className="p-3">Distrito</th>
                 <th className="p-3">Fecha y hora</th>
@@ -326,7 +344,7 @@ export default function GestorRegistros({ tipos, maestroMesas, distritos }) {
             <tbody className="divide-y divide-slate-100">
               {filas.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="p-10 text-center text-slate-400">
+                  <td colSpan={9} className="p-10 text-center text-slate-400">
                     {cargando ? 'Cargando…' : 'No hay registros con estos filtros'}
                   </td>
                 </tr>
@@ -349,6 +367,15 @@ export default function GestorRegistros({ tipos, maestroMesas, distritos }) {
                       <span className={`px-2 py-0.5 rounded-md border text-[10px] font-bold whitespace-nowrap ${t?.badge || 'bg-slate-100 text-slate-700 border-slate-300'}`}>
                         {t?.label || r.tipo_documento}
                       </span>
+                    </td>
+                    <td className="p-3">
+                      {r.tipo_eleccion && r.tipo_eleccion !== 'GENERAL' ? (
+                        <span className={`px-2 py-0.5 rounded-md border text-[10px] font-bold whitespace-nowrap ${elecciones.find((e) => e.id === r.tipo_eleccion)?.badge || ''}`}>
+                          {elecciones.find((e) => e.id === r.tipo_eleccion)?.label || r.tipo_eleccion}
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-slate-400">—</span>
+                      )}
                     </td>
                     <td className="p-3 text-xs text-slate-700 min-w-[180px]">{r.local_votacion}</td>
                     <td className="p-3 text-xs text-slate-700">{r.distrito}</td>
@@ -445,6 +472,20 @@ export default function GestorRegistros({ tipos, maestroMesas, distritos }) {
                   </select>
                 </div>
               </div>
+              {tiposPorEleccion.includes(editando.tipo_documento) && (
+                <div>
+                  <label className={etiqueta}>Elección</label>
+                  <select
+                    value={editando.tipo_eleccion === 'GENERAL' ? 'MUNICIPAL' : editando.tipo_eleccion}
+                    onChange={(e) => setEditando((x) => ({ ...x, tipo_eleccion: e.target.value }))}
+                    className={campo}
+                  >
+                    {elecciones.map((e) => (
+                      <option key={e.id} value={e.id}>{e.label}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer select-none">
                 <input

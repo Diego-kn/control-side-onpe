@@ -16,6 +16,15 @@ const TIPOS = [
   { id: 'CONTROL_ASISTENCIA', label: 'Control Asistencia', short: 'Asistencia', hex: '#9333ea', color: 'bg-purple-600 text-white', badge: 'bg-purple-50 text-purple-700 border-purple-200' },
 ];
 
+// Solo las actas tienen versión Regional y Municipal
+const TIPOS_POR_ELECCION = ['ACTA_ROJA', 'ACTA_CELESTE', 'ACTA_VERDE', 'ACTA_ANARANJADA'];
+const ELECCIONES = [
+  { id: 'REGIONAL', label: 'Regionales', hex: '#0f766e', color: 'bg-teal-600 text-white', badge: 'bg-teal-50 text-teal-700 border-teal-200' },
+  { id: 'MUNICIPAL', label: 'Municipales', hex: '#c2410c', color: 'bg-orange-600 text-white', badge: 'bg-orange-50 text-orange-700 border-orange-200' },
+];
+const aplicaEleccion = (tipoId) => TIPOS_POR_ELECCION.includes(tipoId);
+const eleccionDe = (tipoId, eleccionSel) => (aplicaEleccion(tipoId) ? eleccionSel : 'GENERAL');
+
 /* ============================================================
    COMPONENTES VISUALES (solo presentación)
    ============================================================ */
@@ -275,6 +284,30 @@ export default function Home() {
 
   const [filtroDistrito, setFiltroDistrito] = useState('TODOS');
   const [filtroLocal, setFiltroLocal] = useState('TODOS');
+    // Elección que se está registrando (solo afecta a las actas)
+  const [eleccionSel, setEleccionSel] = useState('MUNICIPAL');
+  const eleccionRef = useRef('MUNICIPAL');
+  eleccionRef.current = eleccionSel;
+
+  useEffect(() => {
+    try {
+      const s = localStorage.getItem('ELECCION_SEL');
+      if (s === 'REGIONAL' || s === 'MUNICIPAL') setEleccionSel(s);
+    } catch (_) {}
+  }, []);
+
+  const cambiarEleccion = (id) => {
+    setEleccionSel(id);
+    try { localStorage.setItem('ELECCION_SEL', id); } catch (_) {}
+    inputRef.current?.focus();
+  };
+
+  // Filtro de elección en reportes: 'TODAS' | 'REGIONAL' | 'MUNICIPAL'
+  const [filtroEleccion, setFiltroEleccion] = useState('TODAS');
+  const nElec = filtroEleccion === 'TODAS' ? 2 : 1;
+  const factorTipo = (id) => (aplicaEleccion(id) ? nElec : 1);
+  const pasaEleccion = (r) =>
+    !aplicaEleccion(r.tipo_documento) || filtroEleccion === 'TODAS' || r.tipo_eleccion === filtroEleccion;
 
   // NUEVO: filtro (checklist) de tipos de documento a visualizar en reportes
   const [tiposVisibles, setTiposVisibles] = useState(TIPOS.map((t) => t.id));
@@ -286,10 +319,11 @@ export default function Home() {
   const [todosRegistros, setTodosRegistros] = useState([]);
 
   // Referencias para elementos de Audio pre-cargados
+  const inputRef = useRef(null);
   const audioSuccessRef = useRef(null);
   const audioErrorRef = useRef(null);
   const audioUnlockedRef = useRef(false);
-  const inputRef = useRef(null);
+  
   const ultimoTimestampRef = useRef(0); // persiste al cambiar de tipo de documento
   const sincronizadoRef = useRef(false); // evita registrar un escaneo viejo al abrir la página
 
@@ -353,7 +387,7 @@ export default function Home() {
     } else if (vista === 'reportes') {
       cargarReporte();
     }
-  }, [vista, filtroDistrito, filtroLocal, maestroMesas]);
+  }, [vista, filtroDistrito, filtroLocal, filtroEleccion, maestroMesas]);
 
   // CONSULTAR API DE ESCANEO (solo los escaneos de ESTA computadora)
   useEffect(() => {
@@ -416,6 +450,26 @@ export default function Home() {
     if (data) setUltimosRegistros(data);
   };
 
+    // Trae TODOS los registros por páginas (Supabase devuelve máximo 1000 por consulta)
+  const traerTodosRegistros = async () => {
+    const todos = [];
+    const SIZE = 1000;
+    for (let desde = 0; ; desde += SIZE) {
+      const { data, error } = await supabase
+        .from('registros')
+        .select('*')
+        .order('id', { ascending: true })
+        .range(desde, desde + SIZE - 1);
+      if (error) {
+        console.error('Error al cargar registros:', error);
+        return null;
+      }
+      todos.push(...data);
+      if (data.length < SIZE) break;
+    }
+    return todos;
+  };
+
   const cargarReporte = async () => {
     let mesasFiltradas = maestroMesas;
     if (filtroDistrito !== 'TODOS') {
@@ -428,7 +482,7 @@ export default function Home() {
     const countEsperado = mesasFiltradas.length || (filtroDistrito === 'TODOS' && filtroLocal === 'TODOS' ? 231 : 0);
     setTotalMesasEsperadas(countEsperado);
 
-    const { data } = await supabase.from('registros').select('*');
+    const data = await traerTodosRegistros();
     if (!data) return;
 
     setTodosRegistros(data);
@@ -446,23 +500,24 @@ export default function Home() {
     const conteos = {};
     TIPOS.forEach(t => conteos[t.id] = 0);
 
-    escaneos.forEach(r => {
+    escaneos.filter(pasaEleccion).forEach(r => {
       if (conteos[r.tipo_documento] !== undefined) {
         conteos[r.tipo_documento]++;
       }
     });
 
     const reporte = TIPOS.map(t => {
+      const esperadosTipo = countEsperado * factorTipo(t.id);
       const recibidos = conteos[t.id];
-      const faltantes = Math.max(0, countEsperado - recibidos);
-      const porcentajeAvance = countEsperado > 0 ? Math.min(100, Math.round((recibidos / countEsperado) * 100)) : 0;
-      const porcentajeFaltante = countEsperado > 0 ? Math.max(0, 100 - porcentajeAvance) : 0;
+      const faltantes = Math.max(0, esperadosTipo - recibidos);
+      const porcentajeAvance = esperadosTipo > 0 ? Math.min(100, Math.round((recibidos / esperadosTipo) * 100)) : 0;
+      const porcentajeFaltante = esperadosTipo > 0 ? Math.max(0, 100 - porcentajeAvance) : 0;
 
       return {
         tipo: t.label,
         id: t.id,
         recibidos,
-        esperados: countEsperado,
+        esperados: esperadosTipo,
         faltantes,
         porcentajeAvance,
         porcentajeFaltante
@@ -564,6 +619,7 @@ export default function Home() {
     const codigoUpper = codigo.trim().toUpperCase();
     const codigoLower = codigo.trim().toLowerCase();
     const conRestriccion = restriccionesRef.current[tipoDoc] !== false;
+    const eleccion = eleccionDe(tipoDoc, eleccionRef.current);
 
     if (!codigoUpper) {
       playBeep(false);
@@ -644,6 +700,7 @@ export default function Home() {
           codigo_barras: codigoUpper,
           numero_mesa: mesa,
           tipo_documento: tipoDoc,
+          tipo_eleccion: eleccion,
           local_votacion: localVotacion,
           distrito: distrito
         },
@@ -652,15 +709,14 @@ export default function Home() {
     if (error) {
       playBeep(false);
       if (error.code === '23505') {
-        setMensaje({ tipo: 'error', texto: `⚠️ ¡DUPLICADO! El código "${codigoUpper}" ya fue registrado.` });
-      } else {
+        setMensaje({ tipo: 'error', texto: `⚠️ ¡DUPLICADO! El código "${codigoUpper}" ya fue registrado${eleccion !== 'GENERAL' ? ` en ${eleccion}` : ''}.` });      } else {
         setMensaje({ tipo: 'error', texto: `Error: ${error.message}` });
       }
     } else {
       playBeep(true);
       setMensaje({
         tipo: 'exito',
-        texto: `✅ MESA ${mesa} | LOCAL: ${localVotacion} (${distrito}) | ${tipoDoc}${conRestriccion ? '' : ' | ⚠️ sin restricciones'}`
+        texto: `✅ MESA ${mesa} | LOCAL: ${localVotacion} (${distrito}) | ${tipoDoc}${eleccion !== 'GENERAL' ? ` · ${eleccion}` : ''}${conRestriccion ? '' : ' | ⚠️ sin restricciones'}`
       });
       cargarUltimos();
     }
@@ -702,12 +758,12 @@ export default function Home() {
     [resumenData, tiposVisibles]
   );
   const registrosVis = useMemo(
-    () => registrosFiltradosRaw.filter((r) => tiposVisibles.includes(r.tipo_documento)),
-    [registrosFiltradosRaw, tiposVisibles]
+    () => registrosFiltradosRaw.filter((r) => tiposVisibles.includes(r.tipo_documento) && pasaEleccion(r)),
+    [registrosFiltradosRaw, tiposVisibles, filtroEleccion]
   );
   const todosVis = useMemo(
-    () => todosRegistros.filter((r) => tiposVisibles.includes(r.tipo_documento)),
-    [todosRegistros, tiposVisibles]
+    () => todosRegistros.filter((r) => tiposVisibles.includes(r.tipo_documento) && pasaEleccion(r)),
+    [todosRegistros, tiposVisibles, filtroEleccion]
   );
 
   const exportarExcel = async () => {
@@ -722,6 +778,7 @@ export default function Home() {
       'Local de Votación': row.local_votacion,
       'Distrito': row.distrito,
       'Tipo de Documento': row.tipo_documento,
+      'Elección': row.tipo_eleccion,
       'Fecha y Hora': new Date(row.fecha_registro).toLocaleString(),
     }));
 
@@ -746,25 +803,28 @@ export default function Home() {
         (filtroLocal === 'TODOS' || m.local_votacion === filtroLocal)
     );
 
+    // Documentos que debe tener cada mesa con los filtros actuales
+    const docsPorMesa = tiposActivos.reduce((a, t) => a + factorTipo(t.id), 0);
+
     const totalRecibidos = resumenVis.reduce((a, r) => a + r.recibidos, 0);
-    const totalEsperadoDocs = totalMesasEsperadas * nTipos;
+    const totalEsperadoDocs = resumenVis.reduce((a, r) => a + r.esperados, 0);
     const avanceGlobal = totalEsperadoDocs > 0 ? Math.min(100, Math.round((totalRecibidos / totalEsperadoDocs) * 100)) : 0;
     const faltantesTotal = resumenVis.reduce((a, r) => a + r.faltantes, 0);
 
-    // Tipos distintos por mesa
-    const tiposPorMesa = {};
+    // Documentos distintos (tipo + elección) por mesa
+    const docsPorMesaMap = {};
     registrosVis.forEach((r) => {
-      if (!tiposPorMesa[r.numero_mesa]) tiposPorMesa[r.numero_mesa] = new Set();
-      tiposPorMesa[r.numero_mesa].add(r.tipo_documento);
+      if (!docsPorMesaMap[r.numero_mesa]) docsPorMesaMap[r.numero_mesa] = new Set();
+      docsPorMesaMap[r.numero_mesa].add(`${r.tipo_documento}|${r.tipo_eleccion}`);
     });
 
-    const buckets = Array.from({ length: nTipos + 1 }, (_, i) => ({ n: i, mesas: 0 }));
+    const buckets = Array.from({ length: docsPorMesa + 1 }, (_, i) => ({ n: i, mesas: 0 }));
     let mesasCompletas = 0;
-    const base = mesasFiltradas.length > 0 ? mesasFiltradas.map((m) => m.numero_mesa) : Object.keys(tiposPorMesa);
+    const base = mesasFiltradas.length > 0 ? mesasFiltradas.map((m) => m.numero_mesa) : Object.keys(docsPorMesaMap);
     base.forEach((mesa) => {
-      const k = tiposPorMesa[mesa] ? tiposPorMesa[mesa].size : 0;
-      buckets[Math.min(k, nTipos)].mesas++;
-      if (nTipos > 0 && k >= nTipos) mesasCompletas++;
+      const k = docsPorMesaMap[mesa] ? docsPorMesaMap[mesa].size : 0;
+      buckets[Math.min(k, docsPorMesa)].mesas++;
+      if (docsPorMesa > 0 && k >= docsPorMesa) mesasCompletas++;
     });
 
     // Escaneos por hora
@@ -781,20 +841,20 @@ export default function Home() {
       for (let h = hMin; h <= hMax; h++) puntosHora.push({ label: `${String(h).padStart(2, '0')}h`, value: porHora[h] || 0 });
     }
 
-    // Ranking por distrito (siempre sobre todo el universo, pero solo tipos visibles)
+    // Ranking por distrito
     const mesasPorDist = {};
     maestroMesas.forEach((m) => { mesasPorDist[m.distrito] = (mesasPorDist[m.distrito] || 0) + 1; });
     const recPorDist = {};
     todosVis.forEach((r) => { recPorDist[r.distrito] = (recPorDist[r.distrito] || 0) + 1; });
     const rankingDistritos = Object.keys(mesasPorDist)
       .map((d) => {
-        const esp = mesasPorDist[d] * nTipos;
+        const esp = mesasPorDist[d] * docsPorMesa;
         const rec = recPorDist[d] || 0;
         return { label: d, value: esp > 0 ? Math.min(100, Math.round((rec / esp) * 100)) : 0, extra: `${rec}/${esp}`, active: d === filtroDistrito };
       })
       .sort((a, b) => b.value - a.value);
 
-    // Heatmap local x tipo (solo columnas visibles)
+    // Heatmap local x tipo
     const locales = {};
     mesasFiltradas.forEach((m) => {
       if (!locales[m.local_votacion]) locales[m.local_votacion] = { mesas: 0, tipos: {} };
@@ -808,7 +868,10 @@ export default function Home() {
     const heat = Object.keys(locales)
       .map((loc) => {
         const info = locales[loc];
-        const celdas = tiposActivos.map((t) => (info.mesas > 0 ? Math.min(100, Math.round(((info.tipos[t.id] || 0) / info.mesas) * 100)) : null));
+        const celdas = tiposActivos.map((t) => {
+          const esp = info.mesas * factorTipo(t.id);
+          return esp > 0 ? Math.min(100, Math.round(((info.tipos[t.id] || 0) / esp) * 100)) : null;
+        });
         const avg = nTipos > 0 ? Math.round(celdas.reduce((a, b) => a + (b || 0), 0) / nTipos) : 0;
         return { local: loc, mesas: info.mesas, celdas, avg };
       })
@@ -819,9 +882,22 @@ export default function Home() {
       .slice(0, 8)
       .map((h) => ({ label: h.local, value: h.avg, extra: `${h.mesas} mesas`, color: heatColor(h.avg) === '#f8fafc' ? '#2563eb' : undefined }));
 
-    return { totalRecibidos, totalEsperadoDocs, avanceGlobal, faltantesTotal, buckets, mesasCompletas, puntosHora, rankingDistritos, heat, rankingLocales };
-  }, [maestroMesas, registrosVis, todosVis, resumenVis, tiposActivos, nTipos, filtroDistrito, filtroLocal, totalMesasEsperadas]);
+    // Comparativo Regional vs Municipal por acta (ignora el filtro de elección para poder comparar)
+    const comparativo = [];
+    tiposActivos.filter((t) => aplicaEleccion(t.id)).forEach((t) => {
+      ELECCIONES.forEach((e) => {
+        const rec = registrosFiltradosRaw.filter((r) => r.tipo_documento === t.id && r.tipo_eleccion === e.id).length;
+        comparativo.push({
+          label: `${t.label} · ${e.label}`,
+          value: totalMesasEsperadas > 0 ? Math.min(100, Math.round((rec / totalMesasEsperadas) * 100)) : 0,
+          extra: `${rec}/${totalMesasEsperadas}`,
+          color: e.hex,
+        });
+      });
+    });
 
+    return { totalRecibidos, totalEsperadoDocs, avanceGlobal, faltantesTotal, buckets, mesasCompletas, puntosHora, rankingDistritos, heat, rankingLocales, docsPorMesa, comparativo };
+  }, [maestroMesas, registrosVis, todosVis, registrosFiltradosRaw, resumenVis, tiposActivos, nTipos, filtroDistrito, filtroLocal, filtroEleccion, totalMesasEsperadas]);
   const donutData = tiposActivos.map((t) => ({
     label: t.label,
     color: t.hex,
@@ -902,6 +978,45 @@ export default function Home() {
                     );
                   })}
                 </div>
+              </Card>
+                            {/* Elección: Regionales / Municipales */}
+              <Card
+                title="🗳️ Elección"
+                subtitle="Solo aplica a las actas (Roja, Celeste, Verde y Anaranjada)"
+                right={
+                  aplicaEleccion(tipoSeleccionado) ? (
+                    <span className={`px-3 py-1 rounded-full text-[11px] font-bold ${ELECCIONES.find((e) => e.id === eleccionSel).color}`}>
+                      Registrando: {ELECCIONES.find((e) => e.id === eleccionSel).label}
+                    </span>
+                  ) : (
+                    <span className="px-3 py-1 rounded-full text-[11px] font-bold bg-slate-200 text-slate-600">No aplica a este documento</span>
+                  )
+                }
+              >
+                <div className="grid grid-cols-2 gap-2.5">
+                  {ELECCIONES.map((e) => {
+                    const activo = eleccionSel === e.id;
+                    return (
+                      <button
+                        key={e.id}
+                        type="button"
+                        onClick={() => cambiarEleccion(e.id)}
+                        className={`p-3 rounded-xl text-sm font-bold transition-all border-2 ${
+                          activo
+                            ? `${e.color} border-transparent shadow-lg scale-[1.02]`
+                            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                        }`}
+                      >
+                        {e.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {!aplicaEleccion(tipoSeleccionado) && (
+                  <p className="text-[11px] text-slate-400 mt-3">
+                    Cédulas, Lista de Electores y Control de Asistencia son una sola por mesa: se registran sin elección.
+                  </p>
+                )}
               </Card>
                             {/* Restricciones de validación */}
               <Card
@@ -1055,6 +1170,12 @@ export default function Home() {
                             <span className={`px-2 py-0.5 rounded-md border text-[10px] font-bold ${infoTipo.badge}`}>
                               {infoTipo.label || r.tipo_documento}
                             </span>
+                            {r.tipo_eleccion && r.tipo_eleccion !== 'GENERAL' && (
+                              <span className={`px-2 py-0.5 rounded-md border text-[10px] font-bold ${ELECCIONES.find((e) => e.id === r.tipo_eleccion)?.badge || ''}`}>
+                                {ELECCIONES.find((e) => e.id === r.tipo_eleccion)?.label || r.tipo_eleccion}
+                              </span>
+                            )}
+                            
                             <span className="text-[11px] text-slate-600">
                               <b className="text-slate-900">Mesa {r.numero_mesa}</b> · {r.local_votacion || 'S/L'} ({r.distrito || 'S/D'})
                             </span>
@@ -1112,6 +1233,32 @@ export default function Home() {
                 >
                   📥 Exportar Excel (.xlsx)
                 </button>
+              </div>
+            </Card>
+                        {/* Filtro de elección */}
+            <Card
+              title="🗳️ Elección a visualizar"
+              subtitle="Las actas se cuentan por elección. Cédulas, Lista de Electores y Control de Asistencia no dependen de la elección y siempre se muestran."
+            >
+              <div className="grid grid-cols-3 gap-2.5">
+                {[
+                  { id: 'TODAS', label: 'Ambas', color: 'bg-slate-900 text-white' },
+                  { id: 'REGIONAL', label: 'Regionales', color: ELECCIONES[0].color },
+                  { id: 'MUNICIPAL', label: 'Municipales', color: ELECCIONES[1].color },
+                ].map((o) => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    onClick={() => setFiltroEleccion(o.id)}
+                    className={`p-3 rounded-xl text-sm font-bold border-2 transition-all ${
+                      filtroEleccion === o.id
+                        ? `${o.color} border-transparent shadow-lg`
+                        : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                    }`}
+                  >
+                    {o.label}
+                  </button>
+                ))}
               </div>
             </Card>
 
@@ -1262,12 +1409,12 @@ export default function Home() {
                   <Card title="Radar de avance" subtitle={`Equilibrio entre ${nTipos === 1 ? 'el tipo' : `los ${nTipos} tipos`} de material seleccionados`}>
                     <Radar rows={resumenVis} />
                   </Card>
-                  <Card title="Mesas según documentos recibidos" subtitle={`Cuántas mesas tienen 0, 1… ${nTipos} tipo${nTipos === 1 ? '' : 's'} de documento`}>
+                  <Card title="Mesas según documentos recibidos" subtitle={`Cuántas mesas tienen 0, 1… ${analitica.docsPorMesa} documento${analitica.docsPorMesa === 1 ? '' : 's'} (cada acta cuenta por elección)`}>
                     <HBars
                       items={analitica.buckets.map((b) => ({
-                        label: b.n === nTipos ? `${b.n} (completas)` : `${b.n} ${b.n === 1 ? 'tipo' : 'tipos'}`,
+                        label: b.n === analitica.docsPorMesa ? `${b.n} (completas)` : `${b.n} ${b.n === 1 ? 'documento' : 'documentos'}`,
                         value: b.mesas,
-                        color: b.n === nTipos ? '#059669' : b.n === 0 ? '#dc2626' : '#2563eb',
+                        color: b.n === analitica.docsPorMesa ? '#059669' : b.n === 0 ? '#dc2626' : '#2563eb',
                       }))}
                       suffix=" mesas"
                       max={Math.max(1, ...analitica.buckets.map((b) => b.mesas))}
@@ -1286,7 +1433,11 @@ export default function Home() {
                     </div>
                   </Card>
                 </div>
-
+                <Card title="Regionales vs Municipales" subtitle="% de avance de cada acta por elección, sobre las mesas del filtro (no depende del filtro de elección)">
+                  <div className="max-h-96 overflow-y-auto pr-2">
+                    <HBars items={analitica.comparativo} />
+                  </div>
+                </Card>
                 <Card title="Mejores locales de votación" subtitle="Top 8 por % de avance dentro del filtro">
                   <HBars items={analitica.rankingLocales} />
                 </Card>
@@ -1395,6 +1546,8 @@ export default function Home() {
             tipos={TIPOS}
             maestroMesas={maestroMesas}
             distritos={distritosUnicos}
+            elecciones={ELECCIONES}
+            tiposPorEleccion={TIPOS_POR_ELECCION}
           />
         )}
       </main>
