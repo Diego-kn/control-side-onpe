@@ -572,6 +572,18 @@ export default function Home() {
       inputRef.current?.focus();
       return;
     }
+        // LÍMITE DE LONGITUD: siempre activo, no depende del checklist de restricciones
+    if (codigoUpper.length > 40) {
+      playBeep(false);
+      setMensaje({
+        tipo: 'error',
+        texto: `🚫 CÓDIGO DEMASIADO LARGO: tiene ${codigoUpper.length} caracteres y el máximo permitido es 40. No se registró.`
+      });
+      setCodigoInput('');
+      inputRef.current?.focus();
+      return;
+    }
+
 
     if (conRestriccion) {
       // 1. VALIDACIÓN GENERAL
